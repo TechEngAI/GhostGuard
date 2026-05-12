@@ -6,11 +6,23 @@ export function middleware(request: NextRequest) {
   const userType = request.cookies.get("user_type")?.value;
   const path = request.nextUrl.pathname;
 
-  if (path.startsWith("/admin") && !path.startsWith("/admin/login") && !path.startsWith("/admin/register") && (!accessToken || userType !== "admin")) {
+  if (
+    path.startsWith("/admin") &&
+    !path.startsWith("/admin/login") &&
+    !path.startsWith("/admin/register") &&
+    !path.startsWith("/admin/verify") &&
+    (!accessToken || userType !== "admin")
+  ) {
     return NextResponse.redirect(new URL("/admin/login", request.url));
   }
 
-  if (path.startsWith("/worker") && !path.startsWith("/worker/login") && !path.startsWith("/worker/register") && (!accessToken || userType !== "worker")) {
+  if (
+    path.startsWith("/worker") &&
+    !path.startsWith("/worker/login") &&
+    !path.startsWith("/worker/register") &&
+    !path.startsWith("/worker/verify") &&
+    (!accessToken || userType !== "worker")
+  ) {
     return NextResponse.redirect(new URL("/worker/login", request.url));
   }
 
