@@ -19,6 +19,12 @@ def _safe_error(response: httpx.Response) -> str:
         return response.text[:500]
 
 
+def _first_row(data: Any) -> dict[str, Any] | None:
+    if not data:
+        return None
+    return data[0] if isinstance(data, list) else data
+
+
 async def initiate_single_payment(worker_result: dict[str, Any], run_id: str, squad_secret_key: str | None = None, reference: str | None = None) -> dict[str, Any]:
     """Create a receipt, then initiate one Squad transfer for one worker."""
 
@@ -52,7 +58,7 @@ async def initiate_single_payment(worker_result: dict[str, Any], run_id: str, sq
     if existing:
         receipt = existing[0]
     else:
-        receipt = (
+        receipt_result = (
             db.table("payment_receipts")
             .insert(
                 {
@@ -78,8 +84,10 @@ async def initiate_single_payment(worker_result: dict[str, Any], run_id: str, sq
                 }
             )
             .execute()
-            .data[0]
         )
+        receipt = _first_row(receipt_result.data)
+        if not receipt:
+            return {"success": False, "error": "Could not create payment receipt", "code": "RECEIPT_CREATE_FAILED"}
     worker_name = f"{worker.get('first_name', '')} {worker.get('last_name', '')}".strip()
     payload = {
         "amount": str(amount_kobo),

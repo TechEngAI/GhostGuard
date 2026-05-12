@@ -16,10 +16,12 @@ async def lookup_account(account_number: str, bank_code: str, squad_secret_key: 
     }
     payload = {"account_number": account_number, "bank_code": bank_code}
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(url, json=payload, headers=headers)
     except httpx.TimeoutException as exc:
-        raise AppError(422, "BANK_LOOKUP_FAILED", "Unable to verify this account. Check the details and try again.") from exc
+        raise AppError(422, "BANK_LOOKUP_TIMEOUT", "Bank lookup timed out. Try again.") from exc
+    except httpx.ConnectError as exc:
+        raise AppError(422, "BANK_LOOKUP_UNAVAILABLE", "Could not reach bank verification service.") from exc
     except httpx.HTTPError as exc:
         raise AppError(422, "BANK_LOOKUP_FAILED", "Unable to verify this account. Check the details and try again.") from exc
 

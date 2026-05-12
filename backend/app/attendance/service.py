@@ -38,18 +38,24 @@ def _parse_dt(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def _require_row(data: Any, code: str, message: str) -> dict[str, Any]:
+    if not data:
+        raise AppError(500, code, message)
+    return data[0] if isinstance(data, list) else data
+
+
 async def _get_role(role_id: str) -> dict[str, Any]:
-    rows = get_supabase().table("roles").select("*").eq("id", role_id).limit(1).execute().data
-    if not rows:
+    result = get_supabase().table("roles").select("*").eq("id", role_id).maybe_single().execute()
+    if not result.data:
         raise AppError(404, "NOT_FOUND", "Worker role was not found.")
-    return rows[0]
+    return result.data
 
 
 async def _get_company(company_id: str) -> dict[str, Any]:
-    rows = get_supabase().table("companies").select("*").eq("id", company_id).limit(1).execute().data
-    if not rows:
+    result = get_supabase().table("companies").select("*").eq("id", company_id).maybe_single().execute()
+    if not result.data:
         raise AppError(404, "NOT_FOUND", "Company was not found.")
-    return rows[0]
+    return result.data
 
 
 def _assert_worker_active(worker: dict[str, Any]) -> None:
@@ -93,6 +99,8 @@ async def _detect_impossible_travel(worker: dict[str, Any], latitude: float, lon
     if not rows:
         return None
     previous = rows[0]
+    if previous.get("check_in_lat") is None or previous.get("check_in_lng") is None:
+        return None
     distance = haversine_metres(float(previous["check_in_lat"]), float(previous["check_in_lng"]), latitude, longitude)
     gap_seconds = (datetime.now(UTC) - _parse_dt(previous["check_in_time"])).total_seconds()
     speed_kmh = float("inf") if gap_seconds <= 0 else (distance / 1000) / (gap_seconds / 3600)
@@ -164,7 +172,7 @@ async def check_in(worker: dict[str, Any], payload: AttendanceCheckInRequest, ip
     distance = None
     if not is_remote:
         if company.get("office_lat") is None or company.get("office_lng") is None:
-            raise AppError(400, "OFFICE_LOCATION_NOT_SET", "Admin has not set office location yet.")
+            raise AppError(400, "GPS_NOT_CONFIGURED", "Your company administrator has not set up the office location yet. Contact your admin.")
         distance = haversine_metres(float(company["office_lat"]), float(company["office_lng"]), payload.latitude, payload.longitude)
         geofence_radius = float(company.get("geofence_radius") or 100)
         if distance > geofence_radius:
@@ -178,7 +186,7 @@ async def check_in(worker: dict[str, Any], payload: AttendanceCheckInRequest, ip
     if shared:
         detected.append(shared)
 
-    record = (
+    record_result = (
         db.table("attendance_records")
         .insert(
             {
@@ -197,8 +205,8 @@ async def check_in(worker: dict[str, Any], payload: AttendanceCheckInRequest, ip
             }
         )
         .execute()
-        .data[0]
     )
+    record = _require_row(record_result.data, "DATABASE_INSERT_FAILED", "Could not create attendance record. Please try again.")
     db.table("workers").update({"last_login": now.isoformat(), "device_id": payload.device_id}).eq("id", worker["id"]).execute()
     return {
         "attendance_id": record["id"],
@@ -218,14 +226,14 @@ async def check_out(worker: dict[str, Any], payload: AttendanceCheckOutRequest) 
         raise AppError(404, "NOT_CHECKED_IN", "No active check-in found. Check in first.")
     now = datetime.now(UTC)
     hours = round((now - _parse_dt(record["check_in_time"])).total_seconds() / 3600, 2)
-    updated = (
+    updated_result = (
         get_supabase()
         .table("attendance_records")
         .update({"check_out_time": now.isoformat(), "check_out_lat": payload.latitude, "check_out_lng": payload.longitude, "hours_worked": hours, "status": "CLOSED"})
         .eq("id", record["id"])
         .execute()
-        .data[0]
     )
+    updated = _require_row(updated_result.data, "DATABASE_UPDATE_FAILED", "Could not check out. Please try again.")
     return {"check_out_time": updated["check_out_time"], "hours_worked": hours, "attendance_id": updated["id"]}
 
 
@@ -261,7 +269,7 @@ async def admin_worker_attendance(admin: dict[str, Any], worker_id: UUID, month:
     worker_rows = get_supabase().table("workers").select("*").eq("id", str(worker_id)).eq("company_id", admin["company_id"]).limit(1).execute().data
     if not worker_rows:
         raise AppError(404, "NOT_FOUND", "Worker was not found.")
-    rows = get_supabase().table("attendance_records").select("*").eq("worker_id", str(worker_id)).eq("month_year", month).order("check_in_time", desc=True).execute().data
+    rows = get_supabase().table("attendance_records").select("*").eq("worker_id", str(worker_id)).eq("company_id", admin["company_id"]).eq("month_year", month).order("check_in_time", desc=True).execute().data
     total_hours = round(sum(float(row.get("hours_worked") or 0) for row in rows), 2)
     start = (page - 1) * page_size
     days_present = len({row["check_in_time"][:10] for row in rows})
@@ -284,7 +292,8 @@ async def edit_record(admin: dict[str, Any], record_id: UUID, payload: Attendanc
     elif payload.check_out_time and before.get("check_in_time"):
         update_data["hours_worked"] = round((payload.check_out_time - _parse_dt(before["check_in_time"])).total_seconds() / 3600, 2)
     update_data.update({"is_manual_edit": True, "edited_by": admin["id"], "edited_at": datetime.now(UTC).isoformat(), "edit_reason": payload.reason, "status": "MANUAL"})
-    updated = db.table("attendance_records").update(jsonable_encoder(update_data)).eq("id", str(record_id)).execute().data[0]
+    updated_result = db.table("attendance_records").update(jsonable_encoder(update_data)).eq("id", str(record_id)).execute()
+    updated = _require_row(updated_result.data, "DATABASE_UPDATE_FAILED", "Could not update attendance record. Please try again.")
     await write_audit(
         admin["id"],
         "admin",

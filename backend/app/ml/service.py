@@ -24,6 +24,12 @@ def _validate_month(payload: PayrollGenerateRequest) -> None:
         raise AppError(400, "FUTURE_MONTH", "Payroll analysis cannot be generated for a future month.")
 
 
+def _require_row(data: Any, code: str, message: str) -> dict[str, Any]:
+    if not data:
+        raise AppError(500, code, message)
+    return data[0] if isinstance(data, list) else data
+
+
 async def generate_payroll(admin: dict[str, Any], payload: PayrollGenerateRequest) -> dict[str, Any]:
     """Generate payroll analysis and ghost-worker ML results for a company month."""
 
@@ -35,22 +41,25 @@ async def generate_payroll(admin: dict[str, Any], payload: PayrollGenerateReques
         raise AppError(409, "PAYROLL_ALREADY_GENERATED", "Payroll analysis already generated for this month. Use GET /admin/payroll/{run_id}/results")
 
     await detect_approval_path_anomaly(admin["company_id"], month_year)
-    company = db.table("companies").select("geofence_radius").eq("id", admin["company_id"]).limit(1).execute().data[0]
+    company_result = db.table("companies").select("geofence_radius").eq("id", admin["company_id"]).maybe_single().execute()
+    if not company_result.data:
+        raise AppError(404, "COMPANY_NOT_FOUND", "Company profile was not found.")
+    company = company_result.data
     workers = db.table("workers").select("id").eq("company_id", admin["company_id"]).eq("status", "ACTIVE").execute().data
     for worker in workers:
         await detect_gps_boundary_hugging(worker["id"], month_year, float(company.get("geofence_radius") or 100))
         await detect_bank_velocity(worker["id"])
 
     feature_rows = await compute_company_features(admin["company_id"], month_year)
-    if not feature_rows:
-        raise AppError(400, "INSUFFICIENT_WORKERS", "No active workers found for this company.")
+    if len(feature_rows) == 0:
+        raise AppError(400, "NO_WORKERS", "No active workers found for this period.")
     results = run_ghost_detection(feature_rows)
     counts = {
         "flagged_count": sum(1 for result in results if result["verdict"] == "FLAGGED"),
         "suspicious_count": sum(1 for result in results if result["verdict"] == "SUSPICIOUS"),
         "verified_count": sum(1 for result in results if result["verdict"] == "VERIFIED"),
     }
-    run = (
+    run_result = (
         db.table("payroll_runs")
         .insert(
             {
@@ -66,8 +75,8 @@ async def generate_payroll(admin: dict[str, Any], payload: PayrollGenerateReques
             }
         )
         .execute()
-        .data[0]
     )
+    run = _require_row(run_result.data, "DATABASE_INSERT_FAILED", "Could not create payroll run. Please try again.")
     for result in results:
         db.table("ghost_analysis_results").insert(
             {

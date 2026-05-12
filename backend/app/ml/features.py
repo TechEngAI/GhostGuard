@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 
 from app.database import get_supabase
+from app.errors import AppError
 
 
 def working_days_in_month(month_year: str) -> int:
@@ -58,9 +59,15 @@ async def compute_worker_features(worker_id: str, company_id: str, month_year: s
     """Compute the exact GhostGuard ML feature set for one worker."""
 
     db = get_supabase()
-    worker = db.table("workers").select("*, roles(*)").eq("id", worker_id).eq("company_id", company_id).limit(1).execute().data[0]
+    worker_result = db.table("workers").select("*, roles(*)").eq("id", worker_id).eq("company_id", company_id).maybe_single().execute()
+    if not worker_result.data:
+        raise AppError(404, "WORKER_NOT_FOUND", "Worker was not found.")
+    worker = worker_result.data
     role = worker.get("roles") or {}
-    company = db.table("companies").select("geofence_radius").eq("id", company_id).limit(1).execute().data[0]
+    company_result = db.table("companies").select("geofence_radius").eq("id", company_id).maybe_single().execute()
+    if not company_result.data:
+        raise AppError(404, "COMPANY_NOT_FOUND", "Company profile was not found.")
+    company = company_result.data
     records = db.table("attendance_records").select("*").eq("worker_id", worker_id).eq("month_year", month_year).execute().data
     working_days = working_days_in_month(month_year)
     present_dates = {record["check_in_time"][:10] for record in records if record.get("check_in_time")}

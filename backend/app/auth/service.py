@@ -1,8 +1,7 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from fastapi.encoders import jsonable_encoder
-from supabase import create_client
 
 from app.auth.schemas import (
     AdminRegisterRequest,
@@ -15,7 +14,7 @@ from app.auth.schemas import (
     WorkerRegisterRequest,
 )
 from app.config import get_settings
-from app.database import get_supabase
+from app.database import get_supabase, get_supabase_admin_client, get_supabase_auth_client
 from app.errors import AppError
 from app.profile import calculate_completeness
 
@@ -23,8 +22,11 @@ UserType = Literal["admin", "worker"]
 
 
 def _auth_client():
-    settings = get_settings()
-    return create_client(settings.supabase_url, settings.supabase_anon_key).auth
+    return get_supabase_auth_client().auth
+
+
+def _admin_auth_client():
+    return get_supabase_admin_client().auth.admin
 
 
 async def sign_in_with_otp(email: str, user_type: UserType, should_create_user: bool = True) -> dict[str, Any]:
@@ -101,13 +103,30 @@ def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
 
 
 def _email_exists(table: str, email: str) -> bool:
-    return bool(get_supabase().table(table).select("id").eq("email", email.lower()).limit(1).execute().data)
+    result = get_supabase().table(table).select("id").eq("email", email.lower()).maybe_single().execute()
+    return bool(result.data)
 
 
 def _phone_exists(table: str, phone_number: str | None) -> bool:
     if not phone_number:
         return False
-    return bool(get_supabase().table(table).select("id").eq("phone_number", phone_number).limit(1).execute().data)
+    result = get_supabase().table(table).select("id").eq("phone_number", phone_number).maybe_single().execute()
+    return bool(result.data)
+
+
+def _require_inserted(row: Any, code: str, message: str) -> Any:
+    if not row:
+        raise AppError(500, code, message)
+    return row[0] if isinstance(row, list) else row
+
+
+def _delete_auth_user_quietly(auth_user_id: str | None) -> None:
+    if not auth_user_id:
+        return
+    try:
+        _admin_auth_client().delete_user(auth_user_id)
+    except Exception as exc:
+        print(f"Failed to roll back Supabase auth user {auth_user_id}: {exc}")
 
 
 async def register_admin(payload: AdminRegisterRequest) -> dict[str, Any]:
@@ -120,6 +139,7 @@ async def register_admin(payload: AdminRegisterRequest) -> dict[str, Any]:
     if _phone_exists("admins", payload.phone_number):
         raise AppError(409, "PHONE_ALREADY_EXISTS", "An admin with this phone number already exists.", "phone_number")
 
+    auth_user_id: str | None = None
     try:
         auth_response = _auth_client().sign_up(
             {
@@ -128,31 +148,37 @@ async def register_admin(payload: AdminRegisterRequest) -> dict[str, Any]:
                 "options": _signup_options("admin", payload.first_name, payload.last_name, email),
             }
         )
+        auth_user_id = _auth_user_id(auth_response)
     except Exception as exc:
         raise AppError(400, "AUTH_SIGNUP_FAILED", "Unable to create Supabase Auth user.") from exc
 
-    company = (
-        db.table("companies")
-        .insert({"name": payload.company_name, "size": payload.company_size, "industry": payload.industry})
-        .execute()
-        .data[0]
-    )
-    admin_payload = {
-        "auth_user_id": _auth_user_id(auth_response),
-        "company_id": company["id"],
-        "first_name": payload.first_name,
-        "last_name": payload.last_name,
-        "middle_name": payload.middle_name,
-        "email": email,
-        "phone_number": payload.phone_number,
-        "gender": payload.gender,
-        "date_of_birth": payload.date_of_birth,
-        "status": "ACTIVE",
-        "verif_channel": payload.verif_channel,
-    }
-    admin = db.table("admins").insert(jsonable_encoder(admin_payload)).execute().data[0]
-    await write_audit(admin["id"], "admin", "CREATE_COMPANY", company["id"], "company", {"after": company})
-    return {"admin": _public_profile(admin), "company": company}
+    try:
+        company_result = db.table("companies").insert({"name": payload.company_name, "size": payload.company_size, "industry": payload.industry}).execute()
+        company = _require_inserted(company_result.data, "DATABASE_INSERT_FAILED", "Could not create company. Please try again.")
+        admin_payload = {
+            "auth_user_id": auth_user_id,
+            "company_id": company["id"],
+            "first_name": payload.first_name,
+            "last_name": payload.last_name,
+            "middle_name": payload.middle_name,
+            "email": email,
+            "phone_number": payload.phone_number,
+            "gender": payload.gender,
+            "date_of_birth": payload.date_of_birth,
+            "status": "ACTIVE",
+            "verif_channel": payload.verif_channel,
+        }
+        admin_result = db.table("admins").insert(jsonable_encoder(admin_payload)).execute()
+        admin = _require_inserted(admin_result.data, "DATABASE_INSERT_FAILED", "Could not create admin profile. Please try again.")
+        await write_audit(admin["id"], "admin", "CREATE_COMPANY", company["id"], "company", {"after": company})
+        return {"admin": _public_profile(admin), "company": company}
+    except AppError:
+        _delete_auth_user_quietly(auth_user_id)
+        raise
+    except Exception as exc:
+        _delete_auth_user_quietly(auth_user_id)
+        print(f"Registration error for admin {email}: {exc}")
+        raise AppError(500, "REGISTRATION_FAILED", "Registration failed. Please try again.") from exc
 
 
 async def register_worker(payload: WorkerRegisterRequest) -> dict[str, Any]:
@@ -160,10 +186,10 @@ async def register_worker(payload: WorkerRegisterRequest) -> dict[str, Any]:
 
     db = get_supabase()
     email = str(payload.email).lower()
-    roles = db.table("roles").select("*").eq("invite_code", payload.invite_code).eq("code_active", True).limit(1).execute().data
-    if not roles:
+    role_result = db.table("roles").select("*").eq("invite_code", payload.invite_code).eq("code_active", True).maybe_single().execute()
+    if not role_result.data:
         raise AppError(400, "INVALID_INVITE_CODE", "Invalid or expired invite code.", "invite_code")
-    role = roles[0]
+    role = role_result.data
     if int(role["headcount_filled"]) >= int(role["headcount_max"]):
         raise AppError(400, "ROLE_FULL", "This role has no available headcount slots.")
     if _email_exists("workers", email):
@@ -171,6 +197,7 @@ async def register_worker(payload: WorkerRegisterRequest) -> dict[str, Any]:
     if _phone_exists("workers", payload.phone_number):
         raise AppError(409, "PHONE_ALREADY_EXISTS", "A worker with this phone number already exists.", "phone_number")
 
+    auth_user_id: str | None = None
     try:
         auth_response = _auth_client().sign_up(
             {
@@ -179,20 +206,31 @@ async def register_worker(payload: WorkerRegisterRequest) -> dict[str, Any]:
                 "options": _signup_options("worker", payload.first_name, payload.last_name, email),
             }
         )
+        auth_user_id = _auth_user_id(auth_response)
     except Exception as exc:
         raise AppError(400, "AUTH_SIGNUP_FAILED", "Unable to create Supabase Auth user.") from exc
 
-    worker_payload = payload.model_dump(exclude={"password", "confirm_password", "invite_code"})
-    worker_payload["auth_user_id"] = _auth_user_id(auth_response)
-    worker_payload["email"] = email
-    worker_payload["company_id"] = role["company_id"]
-    worker_payload["role_id"] = role["id"]
-    worker_payload["status"] = "PENDING_BANK"
-    worker_payload["completeness_score"] = calculate_completeness(worker_payload)
-    worker = db.table("workers").insert(jsonable_encoder(worker_payload)).execute().data[0]
-    db.table("roles").update({"headcount_filled": int(role["headcount_filled"]) + 1}).eq("id", role["id"]).execute()
-    await write_audit(worker["id"], "worker", "REGISTER_WORKER", worker["id"], "worker", {"role_id": role["id"]})
-    return {"worker": _public_profile(worker), "role": role}
+    try:
+        worker_payload = payload.model_dump(exclude={"password", "confirm_password", "invite_code"})
+        worker_payload["auth_user_id"] = auth_user_id
+        worker_payload["email"] = email
+        worker_payload["company_id"] = role["company_id"]
+        worker_payload["role_id"] = role["id"]
+        worker_payload["status"] = "PENDING_BANK"
+        worker_payload["completeness_score"] = calculate_completeness(worker_payload)
+        worker_result = db.table("workers").insert(jsonable_encoder(worker_payload)).execute()
+        worker = _require_inserted(worker_result.data, "DATABASE_INSERT_FAILED", "Could not create worker profile. Please try again.")
+        role_update = db.table("roles").update({"headcount_filled": int(role["headcount_filled"]) + 1}).eq("id", role["id"]).execute()
+        _require_inserted(role_update.data, "DATABASE_UPDATE_FAILED", "Could not update role headcount. Please try again.")
+        await write_audit(worker["id"], "worker", "REGISTER_WORKER", worker["id"], "worker", {"role_id": role["id"]})
+        return {"worker": _public_profile(worker), "role": role}
+    except AppError:
+        _delete_auth_user_quietly(auth_user_id)
+        raise
+    except Exception as exc:
+        _delete_auth_user_quietly(auth_user_id)
+        print(f"Registration error for worker {email}: {exc}")
+        raise AppError(500, "REGISTRATION_FAILED", "Registration failed. Please try again.") from exc
 
 
 async def login_user(user_type: UserType, payload: LoginRequest) -> dict[str, Any]:
@@ -200,8 +238,9 @@ async def login_user(user_type: UserType, payload: LoginRequest) -> dict[str, An
 
     db = get_supabase()
     try:
-        auth_response = db.auth.sign_in_with_password({"email": str(payload.email).lower(), "password": payload.password})
+        auth_response = _auth_client().sign_in_with_password({"email": str(payload.email).strip().lower(), "password": payload.password})
     except Exception as exc:
+        print(f"Login error for {payload.email}: {exc}")
         raise AppError(401, "INVALID_CREDENTIALS", "Invalid credentials.") from exc
 
     user = getattr(auth_response, "user", None)
@@ -211,10 +250,10 @@ async def login_user(user_type: UserType, payload: LoginRequest) -> dict[str, An
     if getattr(user, "email_confirmed_at", None) is None:
         raise AppError(403, "EMAIL_NOT_VERIFIED", "Please verify your email first.")
 
-    rows = db.table(_table_for(user_type)).select("*").eq("auth_user_id", user.id).limit(1).execute().data
-    if not rows:
-        raise AppError(404, "NOT_FOUND", f"{user_type.title()} profile was not found.")
-    profile = rows[0]
+    profile_result = db.table(_table_for(user_type)).select("*").eq("auth_user_id", user.id).maybe_single().execute()
+    if not profile_result.data:
+        raise AppError(404, "PROFILE_NOT_FOUND", "Account setup incomplete. Contact support.")
+    profile = profile_result.data
     if user_type == "admin" and profile.get("status") != "ACTIVE":
         raise AppError(403, "ACCOUNT_SUSPENDED", "Account suspended.")
     if user_type == "worker" and profile.get("status") == "SUSPENDED":
@@ -225,7 +264,8 @@ async def login_user(user_type: UserType, payload: LoginRequest) -> dict[str, An
     update_data: dict[str, Any] = {"last_login": datetime.now(UTC).isoformat()}
     if user_type == "worker" and payload.device_id:
         update_data["device_id"] = payload.device_id
-    profile = db.table(_table_for(user_type)).update(update_data).eq("id", profile["id"]).execute().data[0]
+    update_result = db.table(_table_for(user_type)).update(update_data).eq("id", profile["id"]).execute()
+    profile = _require_inserted(update_result.data, "DATABASE_UPDATE_FAILED", "Could not update last login.")
     await write_audit(profile["id"], user_type, "LOGIN", profile["id"], user_type, {})
     return {
         "access_token": session.access_token,
@@ -239,11 +279,10 @@ async def login_user(user_type: UserType, payload: LoginRequest) -> dict[str, An
 async def refresh_access_token(payload: RefreshRequest) -> dict[str, Any]:
     """Refresh a Supabase Auth session."""
 
-    db = get_supabase()
     try:
-        response = db.auth.refresh_session(payload.refresh_token)
+        response = _auth_client().refresh_session(payload.refresh_token)
     except TypeError:
-        response = db.auth.refresh_session({"refresh_token": payload.refresh_token})
+        response = _auth_client().refresh_session({"refresh_token": payload.refresh_token})
     except Exception as exc:
         raise AppError(401, "UNAUTHORIZED", "Refresh token is invalid or expired.") from exc
     session = _auth_session(response)
@@ -253,12 +292,11 @@ async def refresh_access_token(payload: RefreshRequest) -> dict[str, Any]:
 async def logout_user(access_token: str) -> dict[str, Any]:
     """Sign out the current Supabase Auth session."""
 
-    db = get_supabase()
     try:
-        db.auth.admin.sign_out(access_token)
+        _admin_auth_client().sign_out(access_token)
     except Exception:
         try:
-            db.auth.sign_out()
+            _auth_client().sign_out()
         except Exception as exc:
             raise AppError(400, "LOGOUT_FAILED", "Unable to sign out the current session.") from exc
     return {"logged_out": True}
@@ -291,15 +329,15 @@ async def verify_otp(user_type: UserType, payload: OtpVerifyRequest) -> dict[str
     if not user:
         raise AppError(400, "INVALID_OTP", "Invalid or expired verification code.")
     db = get_supabase()
-    rows = db.table(_table_for(user_type)).select("*").eq("auth_user_id", user.id).limit(1).execute().data
-    if not rows:
+    profile_result = db.table(_table_for(user_type)).select("*").eq("auth_user_id", user.id).maybe_single().execute()
+    if not profile_result.data:
         raise AppError(404, "NOT_FOUND", f"{user_type.title()} profile was not found.")
     return {
         "access_token": session.access_token,
         "refresh_token": session.refresh_token,
         "token_type": "bearer",
         "user_type": user_type,
-        "profile": _public_profile(rows[0]),
+        "profile": _public_profile(profile_result.data),
     }
 
 
@@ -307,8 +345,17 @@ async def resend_otp(user_type: UserType, payload: ResendOtpRequest) -> dict[str
     """Ask Supabase Auth to resend the signup OTP email."""
 
     email = str(payload.email).lower()
+    db = get_supabase()
+    table = _table_for(user_type)
+    profile_result = db.table(table).select("id, last_otp_sent").eq("email", email).maybe_single().execute()
+    if profile_result.data and profile_result.data.get("last_otp_sent"):
+        last_sent = datetime.fromisoformat(str(profile_result.data["last_otp_sent"]).replace("Z", "+00:00"))
+        if datetime.now(UTC) - last_sent < timedelta(seconds=60):
+            raise AppError(429, "RESEND_TOO_SOON", "Please wait 60 seconds before requesting a new code.")
     try:
         _resend_signup_otp(email, user_type)
+        if profile_result.data:
+            db.table(table).update({"last_otp_sent": datetime.now(UTC).isoformat()}).eq("id", profile_result.data["id"]).execute()
     except Exception as exc:
         raise AppError(400, "OTP_RESEND_FAILED", "Unable to resend verification email.") from exc
     return {"sent": True}
@@ -317,13 +364,12 @@ async def resend_otp(user_type: UserType, payload: ResendOtpRequest) -> dict[str
 async def reset_password(payload: ResetPasswordRequest) -> dict[str, Any]:
     """Update a user's password using the reset access token from Supabase."""
 
-    db = get_supabase()
     try:
-        db.auth.get_user(payload.access_token)
-        db.auth.update_user({"password": payload.new_password}, jwt=payload.access_token)
+        _auth_client().get_user(payload.access_token)
+        _auth_client().update_user({"password": payload.new_password}, jwt=payload.access_token)
     except TypeError:
         try:
-            db.auth.update_user({"password": payload.new_password})
+            _auth_client().update_user({"password": payload.new_password})
         except Exception as exc:
             raise AppError(400, "PASSWORD_RESET_FAILED", "Unable to reset password with the provided token.") from exc
     except Exception as exc:

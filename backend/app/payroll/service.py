@@ -27,6 +27,12 @@ def _money(value: Any) -> float:
     return float(value or 0)
 
 
+def _require_row(data: Any, code: str, message: str) -> dict[str, Any]:
+    if not data:
+        raise AppError(500, code, message)
+    return data[0] if isinstance(data, list) else data
+
+
 async def _get_run_for_hr(hr: dict[str, Any], run_id: UUID | str) -> dict[str, Any]:
     rows = get_supabase().table("payroll_runs").select("*").eq("id", str(run_id)).eq("company_id", hr["company_id"]).limit(1).execute().data
     if not rows:
@@ -119,13 +125,13 @@ async def set_decision(hr: dict[str, Any], run_id: UUID, worker_id: UUID, payloa
     if not rows:
         raise AppError(404, "PAYROLL_RESULT_NOT_FOUND", "Payroll result was not found.")
     result = rows[0]
-    updated = (
+    update_result = (
         db.table("ghost_analysis_results")
         .update({"hr_decision": payload.decision, "hr_reviewed_at": datetime.now(UTC).isoformat(), "hr_note": payload.note})
         .eq("id", result["id"])
         .execute()
-        .data[0]
     )
+    updated = _require_row(update_result.data, "DATABASE_UPDATE_FAILED", "Could not save payroll decision.")
     await write_audit(
         hr["id"],
         "hr",
@@ -157,7 +163,8 @@ async def approve_payroll(hr: dict[str, Any], run_id: UUID) -> dict[str, Any]:
         role = ((row.get("workers") or {}).get("roles") or {})
         total += _money(role.get("gross_salary")) - _money(role.get("pension_deduct")) - _money(role.get("health_deduct")) - _money(role.get("other_deductions"))
     approved_at = datetime.now(UTC).isoformat()
-    updated = db.table("payroll_runs").update({"status": "APPROVED", "approved_at": approved_at}).eq("id", str(run_id)).execute().data[0]
+    update_result = db.table("payroll_runs").update({"status": "APPROVED", "approved_at": approved_at}).eq("id", str(run_id)).eq("company_id", hr["company_id"]).execute()
+    updated = _require_row(update_result.data, "DATABASE_UPDATE_FAILED", "Could not approve payroll.")
     hr_name = f"{hr.get('first_name', '')} {hr.get('last_name', '')}".strip()
     await write_audit(hr["id"], "hr", "PAYROLL_APPROVED", str(run_id), "payroll_run", {"run_id": str(run_id), "month_year": run["month_year"], "approved_worker_count": len(included), "approved_by_name": hr_name})
     return {
@@ -347,12 +354,14 @@ async def handle_squad_webhook(raw_body: bytes, signature: str | None) -> dict[s
         return {"ignored": True}
     receipt = rows[0]
     if status == "success":
-        updated = db.table("payment_receipts").update({"squad_status": "PAID", "paid_at": datetime.now(UTC).isoformat(), "squad_tx_id": reference}).eq("id", receipt["id"]).execute().data[0]
+        update_result = db.table("payment_receipts").update({"squad_status": "PAID", "paid_at": datetime.now(UTC).isoformat(), "squad_tx_id": reference}).eq("id", receipt["id"]).execute()
+        updated = _require_row(update_result.data, "DATABASE_UPDATE_FAILED", "Could not update payment receipt.")
         await write_audit(receipt["worker_id"], "system", "SQUAD_PAYMENT_CONFIRMED", receipt["id"], "payment_receipt", {"receipt_id": receipt["id"], "worker_id": receipt["worker_id"], "amount": amount})
         return updated
     if status == "failed":
         message = payload.get("message") or payload.get("status_message") or "Payment failed."
-        updated = db.table("payment_receipts").update({"squad_status": "FAILED", "failure_reason": message}).eq("id", receipt["id"]).execute().data[0]
+        update_result = db.table("payment_receipts").update({"squad_status": "FAILED", "failure_reason": message}).eq("id", receipt["id"]).execute()
+        updated = _require_row(update_result.data, "DATABASE_UPDATE_FAILED", "Could not update payment receipt.")
         await write_audit(receipt["worker_id"], "system", "SQUAD_PAYMENT_FAILED", receipt["id"], "payment_receipt", {"receipt_id": receipt["id"], "worker_id": receipt["worker_id"], "amount": amount, "message": message})
         return updated
     return {"ignored": True}

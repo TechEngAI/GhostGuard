@@ -17,6 +17,12 @@ def _public_worker(worker: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in worker.items() if not key.startswith("_")}
 
 
+def _require_row(data: Any, code: str, message: str) -> dict[str, Any]:
+    if not data:
+        raise AppError(500, code, message)
+    return data[0] if isinstance(data, list) else data
+
+
 async def get_profile(worker: dict[str, Any]) -> dict[str, Any]:
     """Return the authenticated worker's profile."""
 
@@ -43,7 +49,8 @@ async def update_profile(worker: dict[str, Any], payload: WorkerProfileUpdate) -
     update_data = payload.model_dump(exclude_unset=True)
     merged = {**worker, **jsonable_encoder(update_data)}
     update_data["completeness_score"] = calculate_completeness(merged)
-    updated = db.table("workers").update(jsonable_encoder(update_data)).eq("id", worker["id"]).execute().data[0]
+    update_result = db.table("workers").update(jsonable_encoder(update_data)).eq("id", worker["id"]).execute()
+    updated = _require_row(update_result.data, "DATABASE_UPDATE_FAILED", "Could not update profile. Please try again.")
     await write_audit(worker["id"], "worker", "WORKER_PROFILE_UPDATED", worker["id"], "worker", {"before": _public_worker(before), "after": _public_worker(updated)})
     return _public_worker(updated)
 
@@ -88,7 +95,7 @@ async def submit_bank(worker: dict[str, Any], payload: BankSubmitRequest) -> dic
     if existing:
         db.table("worker_bank_accounts").update({"is_active": False}).eq("worker_id", worker["id"]).execute()
 
-    bank_account = db.table("worker_bank_accounts").insert(
+    bank_result = db.table("worker_bank_accounts").insert(
         {
             "worker_id": worker["id"],
             "bank_name": payload.bank_name,
@@ -100,8 +107,10 @@ async def submit_bank(worker: dict[str, Any], payload: BankSubmitRequest) -> dic
             "is_active": True,
             "verified_at": datetime.now(UTC).isoformat() if bank_verified else None,
         }
-    ).execute().data[0]
-    updated_worker = db.table("workers").update({"bank_verified": bank_verified, "status": worker_status}).eq("id", worker["id"]).execute().data[0]
+    ).execute()
+    bank_account = _require_row(bank_result.data, "DATABASE_INSERT_FAILED", "Could not save bank account. Please try again.")
+    worker_update = db.table("workers").update({"bank_verified": bank_verified, "status": worker_status}).eq("id", worker["id"]).execute()
+    updated_worker = _require_row(worker_update.data, "DATABASE_UPDATE_FAILED", "Could not update bank verification status.")
 
     if existing:
         db.table("bank_account_history").insert(

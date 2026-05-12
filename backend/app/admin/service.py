@@ -22,13 +22,31 @@ def _invite_code(company_name: str, role_name: str) -> str:
     return f"GG-{company_prefix}-{role_prefix}-{_random_code(6)}"
 
 
+def _require_row(data: Any, code: str, message: str) -> dict[str, Any]:
+    if not data:
+        raise AppError(500, code, message)
+    return data[0] if isinstance(data, list) else data
+
+
+def _unique_invite_code(db: Any, company_name: str, role_name: str) -> str:
+    max_attempts = 10
+    for attempt in range(max_attempts):
+        code = _invite_code(company_name, role_name)
+        existing = db.table("roles").select("id").eq("invite_code", code).maybe_single().execute()
+        if not existing.data:
+            return code
+        if attempt == max_attempts - 1:
+            raise AppError(500, "CODE_GENERATION_FAILED", "Could not generate unique code. Try again.")
+    raise AppError(500, "CODE_GENERATION_FAILED", "Could not generate unique code. Try again.")
+
+
 async def get_company(admin: dict[str, Any]) -> dict[str, Any]:
     """Return the authenticated admin's company profile."""
 
-    rows = get_supabase().table("companies").select("*").eq("id", admin["company_id"]).limit(1).execute().data
-    if not rows:
+    result = get_supabase().table("companies").select("*").eq("id", admin["company_id"]).maybe_single().execute()
+    if not result.data:
         raise AppError(404, "COMPANY_NOT_FOUND", "Company profile was not found.")
-    return rows[0]
+    return result.data
 
 
 async def update_company(admin: dict[str, Any], payload: CompanyUpdate) -> dict[str, Any]:
@@ -39,7 +57,8 @@ async def update_company(admin: dict[str, Any], payload: CompanyUpdate) -> dict[
     update_data = payload.model_dump(exclude_unset=True)
     if not update_data:
         return before
-    after = db.table("companies").update(jsonable_encoder(update_data)).eq("id", admin["company_id"]).execute().data[0]
+    after_result = db.table("companies").update(jsonable_encoder(update_data)).eq("id", admin["company_id"]).execute()
+    after = _require_row(after_result.data, "DATABASE_UPDATE_FAILED", "Could not update company. Please try again.")
     await write_audit(admin["id"], "admin", "UPDATE_COMPANY", admin["company_id"], "company", {"before": before, "after": after})
     return after
 
@@ -51,18 +70,9 @@ async def create_role(admin: dict[str, Any], payload: RoleCreate) -> dict[str, A
     company = await get_company(admin)
     role_data = jsonable_encoder(payload)
     role_data["company_id"] = admin["company_id"]
-    for _ in range(5):
-        role_data["invite_code"] = _invite_code(company["name"], payload.role_name)
-        try:
-            created = db.table("roles").insert(role_data).execute().data
-            if created:
-                role = created[0]
-                await write_audit(admin["id"], "admin", "CREATE_ROLE", role["id"], "role", {"after": role})
-                return role
-        except Exception:
-            continue
-    role_data["invite_code"] = f"{_invite_code(company['name'], payload.role_name)}{_random_code(1)}"
-    role = db.table("roles").insert(role_data).execute().data[0]
+    role_data["invite_code"] = _unique_invite_code(db, company["name"], payload.role_name)
+    role_result = db.table("roles").insert(role_data).execute()
+    role = _require_row(role_result.data, "DATABASE_INSERT_FAILED", "Could not create role. Please try again.")
     await write_audit(admin["id"], "admin", "CREATE_ROLE", role["id"], "role", {"after": role})
     return role
 
@@ -76,10 +86,10 @@ async def list_roles(admin: dict[str, Any]) -> list[dict[str, Any]]:
 async def get_role(admin: dict[str, Any], role_id: UUID) -> dict[str, Any]:
     """Return a single company role."""
 
-    rows = get_supabase().table("roles").select("*").eq("id", str(role_id)).eq("company_id", admin["company_id"]).limit(1).execute().data
-    if not rows:
+    result = get_supabase().table("roles").select("*").eq("id", str(role_id)).eq("company_id", admin["company_id"]).maybe_single().execute()
+    if not result.data:
         raise AppError(404, "ROLE_NOT_FOUND", "Role was not found.")
-    return rows[0]
+    return result.data
 
 
 async def update_role(admin: dict[str, Any], role_id: UUID, payload: RoleUpdate) -> dict[str, Any]:
@@ -90,7 +100,8 @@ async def update_role(admin: dict[str, Any], role_id: UUID, payload: RoleUpdate)
     update_data = payload.model_dump(exclude_unset=True)
     if "headcount_max" in update_data and int(update_data["headcount_max"]) < int(before["headcount_filled"]):
         raise AppError(400, "HEADCOUNT_TOO_LOW", "headcount_max cannot be below current filled headcount.", "headcount_max")
-    after = db.table("roles").update(jsonable_encoder(update_data)).eq("id", str(role_id)).execute().data[0]
+    after_result = db.table("roles").update(jsonable_encoder(update_data)).eq("id", str(role_id)).eq("company_id", admin["company_id"]).execute()
+    after = _require_row(after_result.data, "DATABASE_UPDATE_FAILED", "Could not update role. Please try again.")
     await write_audit(admin["id"], "admin", "UPDATE_ROLE", str(role_id), "role", {"before": before, "after": after})
     return after
 
@@ -100,8 +111,10 @@ async def regenerate_role_code(admin: dict[str, Any], role_id: UUID) -> dict[str
 
     role = await get_role(admin, role_id)
     company = await get_company(admin)
-    new_code = _invite_code(company["name"], role["role_name"])
-    after = get_supabase().table("roles").update({"invite_code": new_code, "code_active": True}).eq("id", str(role_id)).execute().data[0]
+    db = get_supabase()
+    new_code = _unique_invite_code(db, company["name"], role["role_name"])
+    after_result = db.table("roles").update({"invite_code": new_code, "code_active": True}).eq("id", str(role_id)).eq("company_id", admin["company_id"]).execute()
+    after = _require_row(after_result.data, "DATABASE_UPDATE_FAILED", "Could not regenerate role code. Please try again.")
     await write_audit(admin["id"], "admin", "REGENERATE_ROLE_CODE", str(role_id), "role", {"old_code": role["invite_code"], "new_code": new_code})
     return after
 
@@ -174,7 +187,8 @@ async def review_worker_bank(admin: dict[str, Any], worker_id: UUID, payload: Ba
     worker = await get_worker(admin, worker_id)
     approved = payload.action == "approve"
     status = "ACTIVE" if approved else "PENDING_BANK"
-    updated = db.table("workers").update({"bank_verified": approved, "status": status}).eq("id", str(worker_id)).execute().data[0]
+    updated_result = db.table("workers").update({"bank_verified": approved, "status": status}).eq("id", str(worker_id)).eq("company_id", admin["company_id"]).execute()
+    updated = _require_row(updated_result.data, "DATABASE_UPDATE_FAILED", "Could not update worker bank status.")
     db.table("worker_bank_accounts").update({"match_status": "MANUALLY_APPROVED" if approved else "REJECTED"}).eq("worker_id", str(worker_id)).eq("is_active", True).execute()
     await write_audit(admin["id"], "admin", "MANUAL_BANK_VERIFY", str(worker_id), "worker", {"before": worker, "after": updated, "note": payload.note})
     return updated
@@ -184,7 +198,8 @@ async def suspend_worker(admin: dict[str, Any], worker_id: UUID, payload: Worker
     """Suspend a company worker."""
 
     worker = await get_worker(admin, worker_id)
-    updated = get_supabase().table("workers").update({"status": "SUSPENDED"}).eq("id", str(worker_id)).execute().data[0]
+    updated_result = get_supabase().table("workers").update({"status": "SUSPENDED"}).eq("id", str(worker_id)).eq("company_id", admin["company_id"]).execute()
+    updated = _require_row(updated_result.data, "DATABASE_UPDATE_FAILED", "Could not suspend worker.")
     await write_audit(admin["id"], "admin", "SUSPEND_WORKER", str(worker_id), "worker", {"before": worker, "after": updated, "reason": payload.reason})
     return updated
 
@@ -195,7 +210,8 @@ async def reactivate_worker(admin: dict[str, Any], worker_id: UUID) -> dict[str,
     worker = await get_worker(admin, worker_id)
     if worker.get("bank_verified") is not True:
         raise AppError(400, "BANK_NAME_MISMATCH", "Worker bank account must be verified before reactivation.")
-    updated = get_supabase().table("workers").update({"status": "ACTIVE"}).eq("id", str(worker_id)).execute().data[0]
+    updated_result = get_supabase().table("workers").update({"status": "ACTIVE"}).eq("id", str(worker_id)).eq("company_id", admin["company_id"]).execute()
+    updated = _require_row(updated_result.data, "DATABASE_UPDATE_FAILED", "Could not reactivate worker.")
     await write_audit(admin["id"], "admin", "REACTIVATE_WORKER", str(worker_id), "worker", {"before": worker, "after": updated})
     return updated
 
@@ -211,7 +227,8 @@ async def reassign_worker(admin: dict[str, Any], worker_id: UUID, payload: Worke
     old_role = await get_role(admin, UUID(worker["role_id"]))
     db.table("roles").update({"headcount_filled": max(0, int(old_role["headcount_filled"]) - 1)}).eq("id", old_role["id"]).execute()
     db.table("roles").update({"headcount_filled": int(new_role["headcount_filled"]) + 1}).eq("id", new_role["id"]).execute()
-    updated = db.table("workers").update({"role_id": str(payload.new_role_id)}).eq("id", str(worker_id)).execute().data[0]
+    updated_result = db.table("workers").update({"role_id": str(payload.new_role_id)}).eq("id", str(worker_id)).eq("company_id", admin["company_id"]).execute()
+    updated = _require_row(updated_result.data, "DATABASE_UPDATE_FAILED", "Could not reassign worker.")
     await write_audit(admin["id"], "admin", "REASSIGN_WORKER", str(worker_id), "worker", {"old_role_id": old_role["id"], "new_role_id": new_role["id"], "before": worker, "after": updated})
     return updated
 
@@ -224,7 +241,8 @@ async def soft_delete_worker(admin: dict[str, Any], worker_id: UUID) -> dict[str
     if worker.get("status") != "DELETED":
         role = await get_role(admin, UUID(worker["role_id"]))
         db.table("roles").update({"headcount_filled": max(0, int(role["headcount_filled"]) - 1)}).eq("id", role["id"]).execute()
-    updated = db.table("workers").update({"status": "DELETED"}).eq("id", str(worker_id)).execute().data[0]
+    updated_result = db.table("workers").update({"status": "DELETED"}).eq("id", str(worker_id)).eq("company_id", admin["company_id"]).execute()
+    updated = _require_row(updated_result.data, "DATABASE_UPDATE_FAILED", "Could not delete worker.")
     await write_audit(admin["id"], "admin", "DELETE_WORKER", str(worker_id), "worker", {"before": worker, "after": updated})
     return updated
 

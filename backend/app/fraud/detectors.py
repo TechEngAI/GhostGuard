@@ -35,16 +35,17 @@ async def detect_gps_boundary_hugging(worker_id: str, month_year: str, company_g
     score = boundary_count / len(distances)
     flagged = score > 0.5 and len(distances) >= 5
     if flagged:
-        worker = db.table("workers").select("company_id").eq("id", worker_id).limit(1).execute().data[0]
-        db.table("fraud_signals").insert(
-            {
-                "worker_id": worker_id,
-                "company_id": worker["company_id"],
-                "signal_type": "GPS_BOUNDARY_HUGGING",
-                "severity": "HIGH",
-                "metadata": {"boundary_hugging_score": round(score, 4), "boundary_hugging_count": boundary_count, "total_checkins": len(distances)},
-            }
-        ).execute()
+        worker_result = db.table("workers").select("company_id").eq("id", worker_id).maybe_single().execute()
+        if worker_result.data:
+            db.table("fraud_signals").insert(
+                {
+                    "worker_id": worker_id,
+                    "company_id": worker_result.data["company_id"],
+                    "signal_type": "GPS_BOUNDARY_HUGGING",
+                    "severity": "HIGH",
+                    "metadata": {"boundary_hugging_score": round(score, 4), "boundary_hugging_count": boundary_count, "total_checkins": len(distances)},
+                }
+            ).execute()
     return {"score": round(score, 4), "flagged": flagged}
 
 
@@ -98,15 +99,16 @@ async def detect_bank_velocity(worker_id: str) -> dict[str, Any]:
     account_numbers = [row.get("new_account") for row in rows if row.get("new_account")]
     flagged = len(rows) >= 2
     if flagged:
-        worker = db.table("workers").select("company_id").eq("id", worker_id).limit(1).execute().data[0]
-        db.table("fraud_signals").insert(
-            {
-                "worker_id": worker_id,
-                "company_id": worker["company_id"],
-                "signal_type": "BANK_VELOCITY",
-                "severity": "HIGH",
-                "metadata": {"change_count": len(rows), "period_days": 90, "account_numbers": account_numbers},
-            }
-        ).execute()
+        worker_result = db.table("workers").select("company_id").eq("id", worker_id).maybe_single().execute()
+        if worker_result.data:
+            db.table("fraud_signals").insert(
+                {
+                    "worker_id": worker_id,
+                    "company_id": worker_result.data["company_id"],
+                    "signal_type": "BANK_VELOCITY",
+                    "severity": "HIGH",
+                    "metadata": {"change_count": len(rows), "period_days": 90, "account_numbers": account_numbers},
+                }
+            ).execute()
     return {"change_count": len(rows), "flagged": flagged}
 
