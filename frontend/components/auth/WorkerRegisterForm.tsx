@@ -79,7 +79,7 @@ export function WorkerRegisterForm() {
 
   async function verify() {
     try {
-      const response = await workerVerifyOtp({ email: getValues("email"), otp });
+      const response = await workerVerifyOtp({ email: getValues("email"), otp, type: "signup" });
       const data = response.data.data;
       if (data.access_token) setTokens(data.access_token, data.refresh_token, "worker");
       toast.success("Account verified.");

@@ -55,7 +55,7 @@ function WorkerVerifyContent() {
 
   async function verify() {
     try {
-      const response = await workerVerifyOtp({ email: params.get("email"), otp });
+      const response = await workerVerifyOtp({ email: params.get("email"), otp, type: "signup" });
       finishVerification(response.data.data);
     } catch (error) {
       toast.error(unwrapError(error));
