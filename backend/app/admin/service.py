@@ -28,6 +28,15 @@ def _require_row(data: Any, code: str, message: str) -> dict[str, Any]:
     return data[0] if isinstance(data, list) else data
 
 
+def _require_response(response: Any, code: str, message: str) -> Any:
+    if response is None:
+        raise AppError(500, code, message)
+    error = getattr(response, "error", None)
+    if error:
+        raise AppError(500, code, f"{message} {error}")
+    return response
+
+
 def _unique_invite_code(db: Any, company_name: str, role_name: str) -> str:
     if not company_name or not role_name:
         raise AppError(400, "INVALID_INPUT", "Company name and role name are required.")
@@ -36,14 +45,16 @@ def _unique_invite_code(db: Any, company_name: str, role_name: str) -> str:
     for attempt in range(max_attempts):
         code = _invite_code(company_name, role_name)
         try:
-            existing = db.table("roles").select("id").eq("invite_code", code).maybe_single().execute()
-            if existing is None:
-                raise AppError(500, "DATABASE_QUERY_FAILED", "Database query returned no response. Please try again.")
-            if not existing.data:
+            existing = _require_response(
+                db.table("roles").select("id").eq("invite_code", code).maybe_single().execute(),
+                "DATABASE_QUERY_FAILED",
+                "Could not verify invite code uniqueness."
+            )
+            if existing.data is None:
                 return code
+        except AppError:
+            raise
         except Exception as e:
-            if isinstance(e, AppError):
-                raise
             raise AppError(500, "DATABASE_QUERY_FAILED", f"Failed to check invite code uniqueness: {str(e)}")
         if attempt == max_attempts - 1:
             raise AppError(500, "CODE_GENERATION_FAILED", "Could not generate unique code. Try again.")
@@ -53,8 +64,12 @@ def _unique_invite_code(db: Any, company_name: str, role_name: str) -> str:
 async def get_company(admin: dict[str, Any]) -> dict[str, Any]:
     """Return the authenticated admin's company profile."""
 
-    result = get_supabase().table("companies").select("*").eq("id", admin["company_id"]).maybe_single().execute()
-    if not result.data:
+    result = _require_response(
+        get_supabase().table("companies").select("*").eq("id", admin["company_id"]).maybe_single().execute(),
+        "DATABASE_QUERY_FAILED",
+        "Could not fetch company profile. Please try again."
+    )
+    if result.data is None:
         raise AppError(404, "COMPANY_NOT_FOUND", "Company profile was not found.")
     return result.data
 
@@ -90,9 +105,11 @@ async def create_role(admin: dict[str, Any], payload: RoleCreate) -> dict[str, A
     role_data["invite_code"] = _unique_invite_code(db, company["name"], payload.role_name)
     
     try:
-        role_result = db.table("roles").insert(role_data).execute()
-        if role_result is None:
-            raise AppError(500, "DATABASE_INSERT_FAILED", "Database insert returned no response. Please try again.")
+        role_result = _require_response(
+            db.table("roles").insert(role_data).execute(),
+            "DATABASE_INSERT_FAILED",
+            "Could not create role. Please try again."
+        )
         role = _require_row(role_result.data, "DATABASE_INSERT_FAILED", "Could not create role. Please try again.")
     except AppError:
         raise
