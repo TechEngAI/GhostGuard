@@ -372,7 +372,7 @@ async def verify_otp(user_type: UserType, payload: OtpVerifyRequest) -> dict[str
         if payload.token_hash:
             response = _auth_client().verify_otp({"token_hash": payload.token_hash, "type": payload.type or "signup"})
         else:
-            response = _auth_client().verify_otp({"email": email, "token": payload.otp, "type": payload.type or "email"})
+            response = _auth_client().verify_otp({"email": email, "token": payload.otp, "type": payload.type or "signup"})
     except Exception as exc:
         raise AppError(400, "INVALID_OTP", "Invalid or expired verification code.") from exc
     session = _auth_session(response)
