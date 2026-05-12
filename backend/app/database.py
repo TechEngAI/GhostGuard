@@ -12,6 +12,11 @@ from app.config import get_settings
 def _create_server_client(url: str, key: str) -> Client:
     """Create a Supabase client that does not persist shared auth sessions."""
 
+    if not url:
+        raise RuntimeError("SUPABASE_URL is not configured.")
+    if not key:
+        raise RuntimeError("SUPABASE_KEY is not configured.")
+
     if ClientOptions is None:
         return create_client(url, key)
     return create_client(

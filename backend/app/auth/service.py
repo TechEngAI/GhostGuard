@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
+from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 
 from app.auth.schemas import (
@@ -19,6 +20,12 @@ from app.errors import AppError
 from app.profile import calculate_completeness
 
 UserType = Literal["admin", "worker"]
+
+
+def _require_db_result(result: Any, message: str = "Database returned no response.") -> Any:
+    if result is None:
+        raise HTTPException(status_code=500, detail=message)
+    return result
 
 
 def _auth_client():
@@ -114,6 +121,7 @@ def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
 
 def _email_exists(table: str, email: str) -> bool:
     result = get_supabase().table(table).select("id").eq("email", email.lower()).maybe_single().execute()
+    _require_db_result(result)
     return bool(result.data)
 
 
@@ -121,6 +129,7 @@ def _phone_exists(table: str, phone_number: str | None) -> bool:
     if not phone_number:
         return False
     result = get_supabase().table(table).select("id").eq("phone_number", phone_number).maybe_single().execute()
+    _require_db_result(result)
     return bool(result.data)
 
 
@@ -165,6 +174,7 @@ async def register_admin(payload: AdminRegisterRequest) -> dict[str, Any]:
 
     try:
         company_result = db.table("companies").insert({"name": payload.company_name, "size": payload.company_size, "industry": payload.industry}).execute()
+        _require_db_result(company_result)
         company = _require_inserted(company_result.data, "DATABASE_INSERT_FAILED", "Could not create company. Please try again.")
         admin_payload = {
             "auth_user_id": auth_user_id,
@@ -180,10 +190,14 @@ async def register_admin(payload: AdminRegisterRequest) -> dict[str, Any]:
             "verif_channel": payload.verif_channel,
         }
         admin_result = db.table("admins").insert(jsonable_encoder(admin_payload)).execute()
+        _require_db_result(admin_result)
         admin = _require_inserted(admin_result.data, "DATABASE_INSERT_FAILED", "Could not create admin profile. Please try again.")
         await write_audit(admin["id"], "admin", "CREATE_COMPANY", company["id"], "company", {"after": company})
         return {"admin": _public_profile(admin), "company": company}
     except AppError:
+        _delete_auth_user_quietly(auth_user_id)
+        raise
+    except HTTPException:
         _delete_auth_user_quietly(auth_user_id)
         raise
     except Exception as exc:
@@ -198,6 +212,7 @@ async def register_worker(payload: WorkerRegisterRequest) -> dict[str, Any]:
     db = get_supabase()
     email = str(payload.email).lower()
     role_result = db.table("roles").select("*").eq("invite_code", payload.invite_code).eq("code_active", True).maybe_single().execute()
+    _require_db_result(role_result)
     if not role_result.data:
         raise AppError(400, "INVALID_INVITE_CODE", "Invalid or expired invite code.", "invite_code")
     role = role_result.data
@@ -231,12 +246,17 @@ async def register_worker(payload: WorkerRegisterRequest) -> dict[str, Any]:
         worker_payload["status"] = "PENDING_BANK"
         worker_payload["completeness_score"] = calculate_completeness(worker_payload)
         worker_result = db.table("workers").insert(jsonable_encoder(worker_payload)).execute()
+        _require_db_result(worker_result)
         worker = _require_inserted(worker_result.data, "DATABASE_INSERT_FAILED", "Could not create worker profile. Please try again.")
         role_update = db.table("roles").update({"headcount_filled": int(role["headcount_filled"]) + 1}).eq("id", role["id"]).execute()
+        _require_db_result(role_update)
         _require_inserted(role_update.data, "DATABASE_UPDATE_FAILED", "Could not update role headcount. Please try again.")
         await write_audit(worker["id"], "worker", "REGISTER_WORKER", worker["id"], "worker", {"role_id": role["id"]})
         return {"worker": _public_profile(worker), "role": role}
     except AppError:
+        _delete_auth_user_quietly(auth_user_id)
+        raise
+    except HTTPException:
         _delete_auth_user_quietly(auth_user_id)
         raise
     except Exception as exc:
@@ -265,6 +285,7 @@ async def login_user(user_type: UserType, payload: LoginRequest) -> dict[str, An
         raise AppError(403, "EMAIL_NOT_VERIFIED", "Please verify your email first.")
 
     profile_result = db.table(_table_for(user_type)).select("*").eq("auth_user_id", user.id).maybe_single().execute()
+    _require_db_result(profile_result)
     if not profile_result.data:
         raise AppError(404, "PROFILE_NOT_FOUND", "Account setup incomplete. Contact support.")
     profile = profile_result.data
@@ -279,6 +300,7 @@ async def login_user(user_type: UserType, payload: LoginRequest) -> dict[str, An
     if user_type == "worker" and payload.device_id:
         update_data["device_id"] = payload.device_id
     update_result = db.table(_table_for(user_type)).update(update_data).eq("id", profile["id"]).execute()
+    _require_db_result(update_result)
     profile = _require_inserted(update_result.data, "DATABASE_UPDATE_FAILED", "Could not update last login.")
     await write_audit(profile["id"], user_type, "LOGIN", profile["id"], user_type, {})
     return {
@@ -344,6 +366,7 @@ async def verify_otp(user_type: UserType, payload: OtpVerifyRequest) -> dict[str
         raise AppError(400, "INVALID_OTP", "Invalid or expired verification code.")
     db = get_supabase()
     profile_result = db.table(_table_for(user_type)).select("*").eq("auth_user_id", user.id).maybe_single().execute()
+    _require_db_result(profile_result)
     if not profile_result.data:
         raise AppError(404, "NOT_FOUND", f"{user_type.title()} profile was not found.")
     return {
@@ -362,6 +385,7 @@ async def resend_otp(user_type: UserType, payload: ResendOtpRequest) -> dict[str
     db = get_supabase()
     table = _table_for(user_type)
     profile_result = db.table(table).select("id, last_otp_sent").eq("email", email).maybe_single().execute()
+    _require_db_result(profile_result)
     if profile_result.data and profile_result.data.get("last_otp_sent"):
         last_sent = datetime.fromisoformat(str(profile_result.data["last_otp_sent"]).replace("Z", "+00:00"))
         if datetime.now(UTC) - last_sent < timedelta(seconds=60):
@@ -369,7 +393,10 @@ async def resend_otp(user_type: UserType, payload: ResendOtpRequest) -> dict[str
     try:
         _resend_signup_otp(email, user_type)
         if profile_result.data:
-            db.table(table).update({"last_otp_sent": datetime.now(UTC).isoformat()}).eq("id", profile_result.data["id"]).execute()
+            update_result = db.table(table).update({"last_otp_sent": datetime.now(UTC).isoformat()}).eq("id", profile_result.data["id"]).execute()
+            _require_db_result(update_result)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise AppError(400, "OTP_RESEND_FAILED", "Unable to resend verification email.") from exc
     return {"sent": True}
@@ -402,7 +429,7 @@ async def write_audit(
 ) -> None:
     """Persist an audit log entry."""
 
-    get_supabase().table("audit_logs").insert(
+    result = get_supabase().table("audit_logs").insert(
         {
             "actor_id": actor_id,
             "actor_type": actor_type,
@@ -413,3 +440,4 @@ async def write_audit(
             "ip_address": ip_address,
         }
     ).execute()
+    _require_db_result(result)

@@ -61,7 +61,8 @@ async def admin_reset_password(payload: ResetPasswordRequest):
 
 @router.post("/worker/register")
 async def worker_register(payload: WorkerRegisterRequest):
-    return success_response(await service.register_worker(payload), "Account created. Check your email to verify.")
+    result = await service.register_worker(payload)
+    return success_response(result, "Account created. Check your email to verify.")
 
 
 @router.post("/worker/login")
