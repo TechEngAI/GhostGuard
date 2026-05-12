@@ -72,8 +72,18 @@ class ForgotPasswordRequest(BaseModel):
 
 
 class OtpVerifyRequest(BaseModel):
-    email: EmailStr
-    otp: str = Field(..., min_length=6, max_length=6)
+    email: EmailStr | None = None
+    otp: str | None = Field(None, min_length=6)
+    token_hash: str | None = None
+    type: str | None = None
+
+    @model_validator(mode="after")
+    def validate_verification_token(self) -> "OtpVerifyRequest":
+        if not self.otp and not self.token_hash:
+            raise ValueError("Verification code or token_hash is required.")
+        if self.otp and not self.email:
+            raise ValueError("Email is required when verifying with an OTP code.")
+        return self
 
 
 class ResendOtpRequest(BaseModel):

@@ -27,11 +27,16 @@ def _current_profile(authorization: str | None, user_type: str) -> dict[str, Any
         raise AppError(403, "UNAUTHORIZED", f"{user_type.title()} access is required.")
     table = "admins" if user_type == "admin" else "workers"
     profile_result = db.table(table).select("*").eq("auth_user_id", auth_user.id).maybe_single().execute()
-    if not profile_result.data:
+    profile = profile_result.data if profile_result is not None else None
+    if not profile:
+        email = getattr(auth_user, "email", None)
+        if email:
+            fallback_result = db.table(table).select("*").eq("email", str(email).lower()).maybe_single().execute()
+            profile = fallback_result.data if fallback_result is not None else None
+    if not profile:
         code = "NOT_AN_ADMIN" if user_type == "admin" else "NOT_A_WORKER"
         message = "This account does not have admin access." if user_type == "admin" else "This account does not have worker access."
         raise AppError(403, code, message)
-    profile = profile_result.data
     profile["_access_token"] = token
     profile["_auth_user"] = auth_user
     return profile

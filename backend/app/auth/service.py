@@ -28,6 +28,13 @@ def _require_db_result(result: Any, message: str = "Database returned no respons
     return result
 
 
+def _safe_db_result(result: Any, context: str) -> Any:
+    if result is None:
+        print(f"Supabase database returned no response during {context}.")
+        return None
+    return result
+
+
 def _auth_client():
     return get_supabase_auth_client().auth
 
@@ -117,6 +124,11 @@ def _table_for(user_type: UserType) -> str:
 
 def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in profile.items() if not key.startswith("_")}
+
+
+def _user_email(user: Any, fallback: str | None = None) -> str | None:
+    email = getattr(user, "email", None) or fallback
+    return str(email).lower() if email else None
 
 
 def _email_exists(table: str, email: str) -> bool:
@@ -355,9 +367,12 @@ async def forgot_password(payload: ForgotPasswordRequest) -> dict[str, Any]:
 async def verify_otp(user_type: UserType, payload: OtpVerifyRequest) -> dict[str, Any]:
     """Verify a Supabase email OTP and return a session for the linked profile."""
 
-    email = str(payload.email).lower()
+    email = str(payload.email).lower() if payload.email else None
     try:
-        response = _auth_client().verify_otp({"email": email, "token": payload.otp, "type": "email"})
+        if payload.token_hash:
+            response = _auth_client().verify_otp({"token_hash": payload.token_hash, "type": payload.type or "signup"})
+        else:
+            response = _auth_client().verify_otp({"email": email, "token": payload.otp, "type": payload.type or "email"})
     except Exception as exc:
         raise AppError(400, "INVALID_OTP", "Invalid or expired verification code.") from exc
     session = _auth_session(response)
@@ -365,16 +380,39 @@ async def verify_otp(user_type: UserType, payload: OtpVerifyRequest) -> dict[str
     if not user:
         raise AppError(400, "INVALID_OTP", "Invalid or expired verification code.")
     db = get_supabase()
-    profile_result = db.table(_table_for(user_type)).select("*").eq("auth_user_id", user.id).maybe_single().execute()
-    _require_db_result(profile_result)
-    if not profile_result.data:
-        raise AppError(404, "NOT_FOUND", f"{user_type.title()} profile was not found.")
+    profile = None
+    profile_result = _safe_db_result(
+        db.table(_table_for(user_type)).select("*").eq("auth_user_id", user.id).maybe_single().execute(),
+        f"{user_type} verify profile lookup by auth_user_id",
+    )
+    if profile_result and profile_result.data:
+        profile = profile_result.data
+    else:
+        verified_email = _user_email(user, email)
+        if verified_email:
+            email_profile_result = _safe_db_result(
+                db.table(_table_for(user_type)).select("*").eq("email", verified_email).maybe_single().execute(),
+                f"{user_type} verify profile lookup by email",
+            )
+            if email_profile_result and email_profile_result.data:
+                profile = email_profile_result.data
+
+    if not profile:
+        return {
+            "access_token": session.access_token,
+            "refresh_token": session.refresh_token,
+            "token_type": "bearer",
+            "user_type": user_type,
+            "profile": {},
+            "profile_pending": True,
+        }
+
     return {
         "access_token": session.access_token,
         "refresh_token": session.refresh_token,
         "token_type": "bearer",
         "user_type": user_type,
-        "profile": _public_profile(profile_result.data),
+        "profile": _public_profile(profile),
     }
 
 
@@ -429,15 +467,19 @@ async def write_audit(
 ) -> None:
     """Persist an audit log entry."""
 
-    result = get_supabase().table("audit_logs").insert(
-        {
-            "actor_id": actor_id,
-            "actor_type": actor_type,
-            "action": action,
-            "target_id": target_id,
-            "target_type": target_type,
-            "metadata": metadata or {},
-            "ip_address": ip_address,
-        }
-    ).execute()
-    _require_db_result(result)
+    try:
+        result = get_supabase().table("audit_logs").insert(
+            {
+                "actor_id": actor_id,
+                "actor_type": actor_type,
+                "action": action,
+                "target_id": target_id,
+                "target_type": target_type,
+                "metadata": metadata or {},
+                "ip_address": ip_address,
+            }
+        ).execute()
+        if result is None:
+            print(f"Audit log skipped because database returned no response for action {action}.")
+    except Exception as exc:
+        print(f"Audit log failed for action {action}: {exc}")

@@ -27,14 +27,14 @@ async def get_profile(worker: dict[str, Any]) -> dict[str, Any]:
     """Return the authenticated worker's profile."""
 
     db = get_supabase()
-    rows = (
+    result = (
         db.table("workers")
         .select("*, roles(role_name, department), worker_bank_accounts(*)")
         .eq("id", worker["id"])
         .limit(1)
         .execute()
-        .data
     )
+    rows = result.data if result is not None else None
     profile = rows[0] if rows else worker
     public_profile = _public_worker(profile)
     public_profile["missing_optional_fields"] = missing_profile_fields(profile)
