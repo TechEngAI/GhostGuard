@@ -27,6 +27,45 @@ def _auth_client():
     return create_client(settings.supabase_url, settings.supabase_anon_key).auth
 
 
+async def sign_in_with_otp(email: str, user_type: UserType, should_create_user: bool = True) -> dict[str, Any]:
+    """Send a passwordless Supabase email OTP using the anon key client."""
+
+    normalized_email = email.lower()
+    settings = get_settings()
+    try:
+        _auth_client().sign_in_with_otp(
+            {
+                "email": normalized_email,
+                "options": {
+                    "should_create_user": should_create_user,
+                    "email_redirect_to": f"{settings.frontend_url}/{user_type}/verify?email={normalized_email}",
+                },
+            }
+        )
+    except TypeError:
+        _auth_client().sign_in_with_otp({"email": normalized_email})
+    except Exception as exc:
+        raise AppError(400, "OTP_SEND_FAILED", "Unable to send verification code.") from exc
+    return {"sent": True}
+
+
+def _resend_signup_otp(email: str, user_type: UserType) -> None:
+    """Resend a signup confirmation OTP for a user created with sign_up()."""
+
+    settings = get_settings()
+    redirect_to = f"{settings.frontend_url}/{user_type}/verify?email={email}"
+    try:
+        _auth_client().resend(
+            {
+                "type": "signup",
+                "email": email,
+                "options": {"email_redirect_to": redirect_to},
+            }
+        )
+    except TypeError:
+        _auth_client().resend({"type": "signup", "email": email})
+
+
 def _auth_user_id(auth_response: Any) -> str:
     user = getattr(auth_response, "user", None)
     if not user:
@@ -240,11 +279,11 @@ async def forgot_password(payload: ForgotPasswordRequest) -> dict[str, Any]:
 
 
 async def verify_otp(user_type: UserType, payload: OtpVerifyRequest) -> dict[str, Any]:
-    """Verify a Supabase signup OTP and return a session for the linked profile."""
+    """Verify a Supabase email OTP and return a session for the linked profile."""
 
     email = str(payload.email).lower()
     try:
-        response = _auth_client().verify_otp({"email": email, "token": payload.otp, "type": "signup"})
+        response = _auth_client().verify_otp({"email": email, "token": payload.otp, "type": "email"})
     except Exception as exc:
         raise AppError(400, "INVALID_OTP", "Invalid or expired verification code.") from exc
     session = _auth_session(response)
@@ -268,18 +307,8 @@ async def resend_otp(user_type: UserType, payload: ResendOtpRequest) -> dict[str
     """Ask Supabase Auth to resend the signup OTP email."""
 
     email = str(payload.email).lower()
-    settings = get_settings()
     try:
-        try:
-            _auth_client().resend(
-                {
-                    "type": "signup",
-                    "email": email,
-                    "options": {"email_redirect_to": f"{settings.frontend_url}/{user_type}/verify?email={email}"},
-                }
-            )
-        except TypeError:
-            _auth_client().resend({"type": "signup", "email": email})
+        _resend_signup_otp(email, user_type)
     except Exception as exc:
         raise AppError(400, "OTP_RESEND_FAILED", "Unable to resend verification email.") from exc
     return {"sent": True}
