@@ -1,0 +1,25 @@
+from functools import lru_cache
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Runtime settings loaded from environment variables."""
+
+    supabase_url: str = Field(..., alias="SUPABASE_URL")
+    supabase_anon_key: str = Field(..., alias="SUPABASE_ANON_KEY")
+    supabase_service_key: str = Field(..., alias="SUPABASE_SERVICE_KEY")
+    squad_secret_key: str = Field(..., alias="SQUAD_SECRET_KEY")
+    squad_base_url: str = Field("https://sandbox-api-d.squadco.com", alias="SQUAD_BASE_URL")
+    environment: str = Field("development", alias="ENVIRONMENT")
+    frontend_url: str = Field("http://localhost:3000", alias="FRONTEND_URL")
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Return cached application settings."""
+
+    return Settings()
