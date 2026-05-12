@@ -365,7 +365,12 @@ async def forgot_password(payload: ForgotPasswordRequest) -> dict[str, Any]:
 
 
 async def verify_otp(user_type: UserType, payload: OtpVerifyRequest) -> dict[str, Any]:
-    """Verify a Supabase email OTP and return a session for the linked profile."""
+    """Verify a Supabase signup OTP and return a session.
+
+    Keep this path independent of profile-table reads. The worker/admin profile is
+    fetched by protected routes after the token is stored, so a transient DB read
+    must not make a valid email code look like a failed verification.
+    """
 
     email = str(payload.email).lower() if payload.email else None
     try:
@@ -379,40 +384,13 @@ async def verify_otp(user_type: UserType, payload: OtpVerifyRequest) -> dict[str
     user = getattr(response, "user", None)
     if not user:
         raise AppError(400, "INVALID_OTP", "Invalid or expired verification code.")
-    db = get_supabase()
-    profile = None
-    profile_result = _safe_db_result(
-        db.table(_table_for(user_type)).select("*").eq("auth_user_id", user.id).maybe_single().execute(),
-        f"{user_type} verify profile lookup by auth_user_id",
-    )
-    if profile_result and profile_result.data:
-        profile = profile_result.data
-    else:
-        verified_email = _user_email(user, email)
-        if verified_email:
-            email_profile_result = _safe_db_result(
-                db.table(_table_for(user_type)).select("*").eq("email", verified_email).maybe_single().execute(),
-                f"{user_type} verify profile lookup by email",
-            )
-            if email_profile_result and email_profile_result.data:
-                profile = email_profile_result.data
-
-    if not profile:
-        return {
-            "access_token": session.access_token,
-            "refresh_token": session.refresh_token,
-            "token_type": "bearer",
-            "user_type": user_type,
-            "profile": {},
-            "profile_pending": True,
-        }
-
     return {
         "access_token": session.access_token,
         "refresh_token": session.refresh_token,
         "token_type": "bearer",
         "user_type": user_type,
-        "profile": _public_profile(profile),
+        "profile": {},
+        "profile_pending": True,
     }
 
 
@@ -423,18 +401,16 @@ async def resend_otp(user_type: UserType, payload: ResendOtpRequest) -> dict[str
     db = get_supabase()
     table = _table_for(user_type)
     profile_result = db.table(table).select("id, last_otp_sent").eq("email", email).maybe_single().execute()
-    _require_db_result(profile_result)
-    if profile_result.data and profile_result.data.get("last_otp_sent"):
+    profile_result = _safe_db_result(profile_result, f"{user_type} resend OTP profile lookup")
+    if profile_result and profile_result.data and profile_result.data.get("last_otp_sent"):
         last_sent = datetime.fromisoformat(str(profile_result.data["last_otp_sent"]).replace("Z", "+00:00"))
         if datetime.now(UTC) - last_sent < timedelta(seconds=60):
             raise AppError(429, "RESEND_TOO_SOON", "Please wait 60 seconds before requesting a new code.")
     try:
         _resend_signup_otp(email, user_type)
-        if profile_result.data:
+        if profile_result and profile_result.data:
             update_result = db.table(table).update({"last_otp_sent": datetime.now(UTC).isoformat()}).eq("id", profile_result.data["id"]).execute()
-            _require_db_result(update_result)
-    except HTTPException:
-        raise
+            _safe_db_result(update_result, f"{user_type} resend OTP timestamp update")
     except Exception as exc:
         raise AppError(400, "OTP_RESEND_FAILED", "Unable to resend verification email.") from exc
     return {"sent": True}
