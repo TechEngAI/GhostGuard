@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 
 from app.dependencies import get_current_admin, get_current_hr
 from app.errors import success_response
+from app.auth.schemas import RefreshRequest
 from app.hr import service
 from app.hr.schemas import HRCreateRequest, HRForgotPasswordRequest, HRLoginRequest, HRResetPasswordRequest
 
@@ -45,6 +46,11 @@ async def login(payload: HRLoginRequest):
 @router.post("/auth/hr/logout")
 async def logout(hr: dict[str, Any] = Depends(get_current_hr)):
     return success_response(await service.logout(hr), "HR logged out successfully.")
+
+
+@router.post("/auth/hr/refresh")
+async def refresh(payload: RefreshRequest):
+    return success_response(await service.refresh_access_token(payload), "Access token refreshed.")
 
 
 @router.post("/auth/hr/forgot-password")

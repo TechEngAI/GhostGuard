@@ -29,6 +29,16 @@ def _admin_auth_client():
     return get_supabase_admin_client().auth.admin
 
 
+def _is_email_not_verified_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "email not confirmed" in text or "email_not_confirmed" in text or "email not verified" in text
+
+
+def _ensure_email_channel(verif_channel: str | None) -> None:
+    if verif_channel and verif_channel != "email":
+        raise AppError(400, "PHONE_VERIFICATION_NOT_CONFIGURED", "Phone verification is not configured. Use email verification.")
+
+
 async def sign_in_with_otp(email: str, user_type: UserType, should_create_user: bool = True) -> dict[str, Any]:
     """Send a passwordless Supabase email OTP using the anon key client."""
 
@@ -138,6 +148,7 @@ async def register_admin(payload: AdminRegisterRequest) -> dict[str, Any]:
         raise AppError(409, "EMAIL_ALREADY_EXISTS", "An admin with this email already exists.", "email")
     if _phone_exists("admins", payload.phone_number):
         raise AppError(409, "PHONE_ALREADY_EXISTS", "An admin with this phone number already exists.", "phone_number")
+    _ensure_email_channel(payload.verif_channel)
 
     auth_user_id: str | None = None
     try:
@@ -196,6 +207,7 @@ async def register_worker(payload: WorkerRegisterRequest) -> dict[str, Any]:
         raise AppError(409, "EMAIL_ALREADY_EXISTS", "A worker with this email already exists.", "email")
     if _phone_exists("workers", payload.phone_number):
         raise AppError(409, "PHONE_ALREADY_EXISTS", "A worker with this phone number already exists.", "phone_number")
+    _ensure_email_channel(payload.verif_channel)
 
     auth_user_id: str | None = None
     try:
@@ -241,6 +253,8 @@ async def login_user(user_type: UserType, payload: LoginRequest) -> dict[str, An
         auth_response = _auth_client().sign_in_with_password({"email": str(payload.email).strip().lower(), "password": payload.password})
     except Exception as exc:
         print(f"Login error for {payload.email}: {exc}")
+        if _is_email_not_verified_error(exc):
+            raise AppError(403, "EMAIL_NOT_VERIFIED", "Please verify your email before logging in.") from exc
         raise AppError(401, "INVALID_CREDENTIALS", "Invalid credentials.") from exc
 
     user = getattr(auth_response, "user", None)
@@ -365,14 +379,14 @@ async def reset_password(payload: ResetPasswordRequest) -> dict[str, Any]:
     """Update a user's password using the reset access token from Supabase."""
 
     try:
-        _auth_client().get_user(payload.access_token)
-        _auth_client().update_user({"password": payload.new_password}, jwt=payload.access_token)
-    except TypeError:
-        try:
-            _auth_client().update_user({"password": payload.new_password})
-        except Exception as exc:
-            raise AppError(400, "PASSWORD_RESET_FAILED", "Unable to reset password with the provided token.") from exc
+        user_response = _auth_client().get_user(payload.access_token)
+        user = getattr(user_response, "user", None)
+        if not user:
+            raise AppError(400, "PASSWORD_RESET_FAILED", "Unable to reset password with the provided token.")
+        _admin_auth_client().update_user_by_id(str(user.id), {"password": payload.new_password})
     except Exception as exc:
+        if isinstance(exc, AppError):
+            raise
         raise AppError(400, "PASSWORD_RESET_FAILED", "Unable to reset password with the provided token.") from exc
     return {"updated": True}
 

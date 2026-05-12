@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi.encoders import jsonable_encoder
 
+from app.auth.schemas import RefreshRequest
 from app.auth.service import write_audit
 from app.database import get_supabase, get_supabase_admin_client, get_supabase_auth_client
 from app.errors import AppError
@@ -40,6 +41,11 @@ def _email_in_use(email: str) -> bool:
         if db.table(table).select("id").eq("email", email).maybe_single().execute().data:
             return True
     return False
+
+
+def _is_email_not_verified_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "email not confirmed" in text or "email_not_confirmed" in text or "email not verified" in text
 
 
 async def create_hr_officer(admin: dict[str, Any], payload: HRCreateRequest) -> dict[str, Any]:
@@ -146,6 +152,8 @@ async def login(payload: HRLoginRequest) -> dict[str, Any]:
         response = get_supabase_auth_client().auth.sign_in_with_password({"email": str(payload.email).strip().lower(), "password": payload.password})
     except Exception as exc:
         print(f"HR login error for {payload.email}: {exc}")
+        if _is_email_not_verified_error(exc):
+            raise AppError(403, "EMAIL_NOT_VERIFIED", "Please verify your email before logging in.") from exc
         raise AppError(401, "INVALID_CREDENTIALS", "Invalid credentials.") from exc
     user = getattr(response, "user", None)
     session = _session(response)
@@ -176,7 +184,6 @@ async def login(payload: HRLoginRequest) -> dict[str, Any]:
 
 
 async def logout(hr: dict[str, Any]) -> dict[str, Any]:
-    db = get_supabase()
     try:
         get_supabase_admin_client().auth.admin.sign_out(hr["_access_token"])
     except Exception:
@@ -185,6 +192,17 @@ async def logout(hr: dict[str, Any]) -> dict[str, Any]:
         except Exception as exc:
             raise AppError(400, "LOGOUT_FAILED", "Unable to sign out the current session.") from exc
     return {"logged_out": True}
+
+
+async def refresh_access_token(payload: RefreshRequest) -> dict[str, Any]:
+    try:
+        response = get_supabase_auth_client().auth.refresh_session(payload.refresh_token)
+    except TypeError:
+        response = get_supabase_auth_client().auth.refresh_session({"refresh_token": payload.refresh_token})
+    except Exception as exc:
+        raise AppError(401, "UNAUTHORIZED", "Refresh token is invalid or expired.") from exc
+    session = _session(response)
+    return {"access_token": session.access_token, "refresh_token": session.refresh_token, "token_type": "bearer"}
 
 
 async def forgot_password(payload: HRForgotPasswordRequest) -> dict[str, Any]:
@@ -197,13 +215,13 @@ async def forgot_password(payload: HRForgotPasswordRequest) -> dict[str, Any]:
 
 async def reset_password(payload: HRResetPasswordRequest) -> dict[str, Any]:
     try:
-        get_supabase_auth_client().auth.get_user(payload.access_token)
-        get_supabase_auth_client().auth.update_user({"password": payload.new_password}, jwt=payload.access_token)
-    except TypeError:
-        try:
-            get_supabase_auth_client().auth.update_user({"password": payload.new_password})
-        except Exception as exc:
-            raise AppError(400, "PASSWORD_RESET_FAILED", "Unable to reset password with the provided token.") from exc
+        user_response = get_supabase_auth_client().auth.get_user(payload.access_token)
+        user = getattr(user_response, "user", None)
+        if not user:
+            raise AppError(400, "PASSWORD_RESET_FAILED", "Unable to reset password with the provided token.")
+        get_supabase_admin_client().auth.admin.update_user_by_id(str(user.id), {"password": payload.new_password})
     except Exception as exc:
+        if isinstance(exc, AppError):
+            raise
         raise AppError(400, "PASSWORD_RESET_FAILED", "Unable to reset password with the provided token.") from exc
     return {"updated": True}
