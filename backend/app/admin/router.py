@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 
 from app.admin import service
-from app.admin.schemas import BankReviewRequest, CompanyUpdate, RoleCreate, RoleUpdate, WorkerReassignRequest, WorkerSuspendRequest
+from app.admin.schemas import BankReviewRequest, CompanyUpdate, CreateRoleSchema, UpdateRoleSchema, WorkerReassignRequest, WorkerSuspendRequest
 from app.dependencies import get_current_admin
 from app.errors import success_response
 
@@ -21,14 +21,18 @@ async def update_company(payload: CompanyUpdate, admin: dict[str, Any] = Depends
     return success_response(await service.update_company(admin, payload), "Company profile updated.")
 
 
-@router.post("/roles")
-async def create_role(payload: RoleCreate, admin: dict[str, Any] = Depends(get_current_admin)):
-    return success_response(await service.create_role(admin, payload), "Role created successfully.")
+@router.post("/roles", status_code=201)
+async def create_role(data: CreateRoleSchema, current_admin: dict[str, Any] = Depends(get_current_admin)):
+    """Create a new role. Returns the created role including the generated invite code."""
+
+    return await service.create_role(data, current_admin)
 
 
 @router.get("/roles")
-async def roles(admin: dict[str, Any] = Depends(get_current_admin)):
-    return success_response(await service.list_roles(admin), "Roles retrieved.")
+async def roles(current_admin: dict[str, Any] = Depends(get_current_admin)):
+    """List all roles for this admin's company."""
+
+    return {"success": True, "data": await service.list_roles(current_admin) or []}
 
 
 @router.get("/roles/{role_id}")
@@ -37,18 +41,18 @@ async def role(role_id: UUID, admin: dict[str, Any] = Depends(get_current_admin)
 
 
 @router.put("/roles/{role_id}")
-async def update_role(role_id: UUID, payload: RoleUpdate, admin: dict[str, Any] = Depends(get_current_admin)):
-    return success_response(await service.update_role(admin, role_id, payload), "Role updated.")
+async def update_role(role_id: UUID, data: UpdateRoleSchema, current_admin: dict[str, Any] = Depends(get_current_admin)):
+    return await service.update_role(role_id, data, current_admin)
 
 
 @router.post("/roles/{role_id}/regenerate-code")
-async def regenerate_code(role_id: UUID, admin: dict[str, Any] = Depends(get_current_admin)):
-    return success_response(await service.regenerate_role_code(admin, role_id), "Invite code regenerated.")
+async def regenerate_code(role_id: UUID, current_admin: dict[str, Any] = Depends(get_current_admin)):
+    return await service.regenerate_invite_code(role_id, current_admin)
 
 
 @router.delete("/roles/{role_id}")
-async def delete_role(role_id: UUID, admin: dict[str, Any] = Depends(get_current_admin)):
-    return success_response(await service.delete_role(admin, role_id), "Role deleted.")
+async def delete_role(role_id: UUID, current_admin: dict[str, Any] = Depends(get_current_admin)):
+    return await service.delete_role(role_id, current_admin)
 
 
 @router.get("/workers")

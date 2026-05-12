@@ -1,25 +1,24 @@
 from typing import Any
 from uuid import UUID
-import secrets
+from datetime import datetime, timezone
+import random
 import string
 
 from fastapi.encoders import jsonable_encoder
 
-from app.admin.schemas import BankReviewRequest, CompanyUpdate, RoleCreate, RoleUpdate, WorkerReassignRequest, WorkerSuspendRequest
+from app.admin.schemas import BankReviewRequest, CompanyUpdate, CreateRoleSchema, UpdateRoleSchema, WorkerReassignRequest, WorkerSuspendRequest
 from app.auth.service import write_audit
 from app.database import get_supabase
 from app.errors import AppError
 
 
-def _random_code(length: int = 6) -> str:
-    alphabet = string.ascii_uppercase + string.digits
-    return "".join(secrets.choice(alphabet) for _ in range(length))
+def _generate_code(company_name: str, role_name: str) -> str:
+    """Generate a GhostGuard invite code."""
 
-
-def _invite_code(company_name: str, role_name: str) -> str:
-    company_prefix = "".join(company_name.upper().split())[:4].ljust(4, "X")
-    role_prefix = "".join(role_name.upper().split())[:3].ljust(3, "X")
-    return f"GG-{company_prefix}-{role_prefix}-{_random_code(6)}"
+    co = "".join(c for c in company_name.upper() if c.isalnum())[:4].ljust(4, "X")
+    ro = "".join(c for c in role_name.upper() if c.isalnum())[:3].ljust(3, "X")
+    suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    return f"GG-{co}-{ro}-{suffix}"
 
 
 def _require_row(data: Any, code: str, message: str) -> dict[str, Any]:
@@ -43,7 +42,7 @@ def _unique_invite_code(db: Any, company_name: str, role_name: str) -> str:
     
     max_attempts = 10
     for attempt in range(max_attempts):
-        code = _invite_code(company_name, role_name)
+        code = _generate_code(company_name, role_name)
         try:
             existing = _require_response(
                 db.table("roles").select("id").eq("invite_code", code).maybe_single().execute(),
@@ -59,6 +58,13 @@ def _unique_invite_code(db: Any, company_name: str, role_name: str) -> str:
         if attempt == max_attempts - 1:
             raise AppError(500, "CODE_GENERATION_FAILED", "Could not generate unique code. Try again.")
     raise AppError(500, "CODE_GENERATION_FAILED", "Could not generate unique code. Try again.")
+
+
+def _admin_company_id(current_admin: dict[str, Any]) -> str:
+    company_id = current_admin.get("company_id") or current_admin.get("company", {}).get("id")
+    if not company_id:
+        raise AppError(400, "COMPANY_NOT_FOUND", "Admin has no associated company. Complete company setup first.")
+    return company_id
 
 
 async def get_company(admin: dict[str, Any]) -> dict[str, Any]:
@@ -88,42 +94,97 @@ async def update_company(admin: dict[str, Any], payload: CompanyUpdate) -> dict[
     return after
 
 
-async def create_role(admin: dict[str, Any], payload: RoleCreate) -> dict[str, Any]:
-    """Create a payroll role with a unique GhostGuard invite code."""
+async def create_role(data: CreateRoleSchema, current_admin: dict[str, Any]) -> dict[str, Any]:
+    """Create a new role for the admin's company."""
 
     db = get_supabase()
-    company = await get_company(admin)
-    
-    # Verify company data before using it
-    if not company or not isinstance(company, dict):
-        raise AppError(500, "INVALID_COMPANY_DATA", "Company data is corrupted. Please try again.")
-    if not company.get("name"):
-        raise AppError(500, "MISSING_COMPANY_NAME", "Company name is missing. Please update company profile.")
-    
-    role_data = jsonable_encoder(payload)
-    role_data["company_id"] = admin["company_id"]
-    role_data["invite_code"] = _unique_invite_code(db, company["name"], payload.role_name)
-    
+    company_id = _admin_company_id(current_admin)
+
     try:
-        role_result = _require_response(
-            db.table("roles").insert(role_data).execute(),
-            "DATABASE_INSERT_FAILED",
-            "Could not create role. Please try again."
-        )
-        role = _require_row(role_result.data, "DATABASE_INSERT_FAILED", "Could not create role. Please try again.")
-    except AppError:
-        raise
+        company_result = db.table("companies").select("name").eq("id", company_id).single().execute()
+        company_name = company_result.data["name"] if company_result.data else "COMP"
+    except Exception:
+        company_name = "COMP"
+
+    invite_code = None
+    max_attempts = 10
+    for _ in range(max_attempts):
+        candidate = _generate_code(company_name, data.role_name)
+        try:
+            existing = db.table("roles").select("id").eq("invite_code", candidate).maybe_single().execute()
+            if not existing.data:
+                invite_code = candidate
+                break
+        except Exception:
+            invite_code = candidate
+            break
+
+    if not invite_code:
+        raise AppError(500, "CODE_GENERATION_FAILED", "Could not generate a unique invite code. Try again.")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    insert_payload = {
+        "company_id": company_id,
+        "role_name": data.role_name.strip(),
+        "department": data.department,
+        "grade_level": data.grade_level,
+        "headcount_max": data.headcount_max,
+        "headcount_filled": 0,
+        "gross_salary": float(data.gross_salary),
+        "pension_deduct": float(data.pension_deduct or 0),
+        "health_deduct": float(data.health_deduct or 0),
+        "other_deductions": float(data.other_deductions or 0),
+        "work_type": data.work_type or "ONSITE",
+        "invite_code": invite_code,
+        "code_active": True,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+
+    try:
+        result = db.table("roles").insert(insert_payload).execute()
     except Exception as e:
-        raise AppError(500, "DATABASE_INSERT_FAILED", f"Could not create role: {str(e)}")
-    
-    await write_audit(admin["id"], "admin", "CREATE_ROLE", role["id"], "role", {"after": role})
-    return role
+        error_str = str(e).lower()
+        if "unique" in error_str and "invite_code" in error_str:
+            raise AppError(409, "CODE_COLLISION", "Invite code conflict. Please try again.")
+        print(f"Role insert error: {e}")
+        raise AppError(500, "ROLE_CREATE_FAILED", "Failed to create role. Please try again.")
+
+    if not result.data:
+        raise AppError(500, "ROLE_CREATE_FAILED", "Role creation returned no data. Check Supabase RLS policies.")
+
+    new_role = result.data[0]
+
+    try:
+        db.table("audit_logs").insert({
+            "actor_id": current_admin["id"],
+            "actor_type": "admin",
+            "action": "CREATE_ROLE",
+            "target_id": new_role["id"],
+            "target_type": "role",
+            "metadata": {
+                "role_name": data.role_name,
+                "headcount_max": data.headcount_max,
+                "gross_salary": float(data.gross_salary),
+                "invite_code": invite_code,
+            },
+            "created_at": now_iso,
+        }).execute()
+    except Exception as audit_err:
+        print(f"Audit log failed for role creation: {audit_err}")
+
+    return {
+        "success": True,
+        "message": f"Role '{data.role_name}' created successfully.",
+        "data": new_role,
+    }
 
 
 async def list_roles(admin: dict[str, Any]) -> list[dict[str, Any]]:
     """List roles belonging to the admin's company."""
 
-    return get_supabase().table("roles").select("*").eq("company_id", admin["company_id"]).order("created_at", desc=True).execute().data
+    company_id = _admin_company_id(admin)
+    return get_supabase().table("roles").select("*").eq("company_id", company_id).order("created_at", desc=True).execute().data
 
 
 async def get_role(admin: dict[str, Any], role_id: UUID) -> dict[str, Any]:
@@ -135,42 +196,144 @@ async def get_role(admin: dict[str, Any], role_id: UUID) -> dict[str, Any]:
     return result.data
 
 
-async def update_role(admin: dict[str, Any], role_id: UUID, payload: RoleUpdate) -> dict[str, Any]:
-    """Update a role and audit before/after values."""
-
+async def update_role(role_id: str | UUID, data: UpdateRoleSchema, current_admin: dict[str, Any]) -> dict[str, Any]:
     db = get_supabase()
-    before = await get_role(admin, role_id)
-    update_data = payload.model_dump(exclude_unset=True)
-    if "headcount_max" in update_data and int(update_data["headcount_max"]) < int(before["headcount_filled"]):
-        raise AppError(400, "HEADCOUNT_TOO_LOW", "headcount_max cannot be below current filled headcount.", "headcount_max")
-    after_result = db.table("roles").update(jsonable_encoder(update_data)).eq("id", str(role_id)).eq("company_id", admin["company_id"]).execute()
-    after = _require_row(after_result.data, "DATABASE_UPDATE_FAILED", "Could not update role. Please try again.")
-    await write_audit(admin["id"], "admin", "UPDATE_ROLE", str(role_id), "role", {"before": before, "after": after})
-    return after
+    company_id = _admin_company_id(current_admin)
+
+    existing = db.table("roles").select("*").eq("id", str(role_id)).eq("company_id", company_id).maybe_single().execute()
+
+    if not existing.data:
+        raise AppError(404, "ROLE_NOT_FOUND", "Role not found or does not belong to your company.")
+
+    update_payload: dict[str, Any] = {}
+    if data.role_name is not None:
+        update_payload["role_name"] = data.role_name.strip()
+    if data.department is not None:
+        update_payload["department"] = data.department
+    if data.grade_level is not None:
+        update_payload["grade_level"] = data.grade_level
+    if data.headcount_max is not None:
+        if data.headcount_max < existing.data["headcount_filled"]:
+            raise AppError(400, "HEADCOUNT_TOO_LOW", f"Cannot set max headcount below current filled count ({existing.data['headcount_filled']}).")
+        update_payload["headcount_max"] = data.headcount_max
+    if data.gross_salary is not None:
+        update_payload["gross_salary"] = float(data.gross_salary)
+    if data.pension_deduct is not None:
+        update_payload["pension_deduct"] = float(data.pension_deduct)
+    if data.health_deduct is not None:
+        update_payload["health_deduct"] = float(data.health_deduct)
+    if data.other_deductions is not None:
+        update_payload["other_deductions"] = float(data.other_deductions)
+    if data.work_type is not None:
+        update_payload["work_type"] = data.work_type
+
+    if not update_payload:
+        return {"success": True, "message": "No changes made.", "data": existing.data}
+
+    update_payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    result = db.table("roles").update(update_payload).eq("id", str(role_id)).execute()
+
+    if not result.data:
+        raise AppError(500, "UPDATE_FAILED", "Role update failed.")
+
+    try:
+        db.table("audit_logs").insert({
+            "actor_id": current_admin["id"],
+            "actor_type": "admin",
+            "action": "UPDATE_ROLE",
+            "target_id": str(role_id),
+            "target_type": "role",
+            "metadata": {"before": existing.data, "after": update_payload},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+    except Exception as audit_err:
+        print(f"Audit log failed for role update: {audit_err}")
+
+    return {"success": True, "message": "Role updated.", "data": result.data[0]}
+
+
+async def delete_role(role_id: str | UUID, current_admin: dict[str, Any]) -> dict[str, Any]:
+    db = get_supabase()
+    company_id = _admin_company_id(current_admin)
+
+    existing = db.table("roles").select("*").eq("id", str(role_id)).eq("company_id", company_id).maybe_single().execute()
+
+    if not existing.data:
+        raise AppError(404, "ROLE_NOT_FOUND", "Role not found.")
+
+    if existing.data["headcount_filled"] > 0:
+        raise AppError(400, "ROLE_HAS_WORKERS", f"Cannot delete a role with {existing.data['headcount_filled']} active worker(s). Reassign them first.")
+
+    db.table("roles").delete().eq("id", str(role_id)).execute()
+
+    try:
+        db.table("audit_logs").insert({
+            "actor_id": current_admin["id"],
+            "actor_type": "admin",
+            "action": "DELETE_ROLE",
+            "target_id": str(role_id),
+            "target_type": "role",
+            "metadata": {"role_name": existing.data["role_name"]},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+    except Exception as audit_err:
+        print(f"Audit log failed for role deletion: {audit_err}")
+
+    return {"success": True, "message": f"Role '{existing.data['role_name']}' deleted."}
+
+
+async def regenerate_invite_code(role_id: str | UUID, current_admin: dict[str, Any]) -> dict[str, Any]:
+    db = get_supabase()
+    company_id = _admin_company_id(current_admin)
+
+    existing = db.table("roles").select("*").eq("id", str(role_id)).eq("company_id", company_id).maybe_single().execute()
+
+    if not existing.data:
+        raise AppError(404, "ROLE_NOT_FOUND", "Role not found.")
+
+    company_result = db.table("companies").select("name").eq("id", company_id).single().execute()
+    company_name = company_result.data["name"] if company_result.data else "COMP"
+
+    new_code = None
+    for _ in range(10):
+        candidate = _generate_code(company_name, existing.data["role_name"])
+        check = db.table("roles").select("id").eq("invite_code", candidate).maybe_single().execute()
+        if not check.data:
+            new_code = candidate
+            break
+
+    if not new_code:
+        raise AppError(500, "CODE_GENERATION_FAILED", "Try again.")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    db.table("roles").update({
+        "invite_code": new_code,
+        "updated_at": now_iso,
+    }).eq("id", str(role_id)).execute()
+
+    try:
+        db.table("audit_logs").insert({
+            "actor_id": current_admin["id"],
+            "actor_type": "admin",
+            "action": "REGENERATE_ROLE_CODE",
+            "target_id": str(role_id),
+            "target_type": "role",
+            "metadata": {"old_code": existing.data["invite_code"], "new_code": new_code},
+            "created_at": now_iso,
+        }).execute()
+    except Exception as audit_err:
+        print(f"Audit log failed for code regeneration: {audit_err}")
+
+    return {
+        "success": True,
+        "message": "New invite code generated. Old code is now invalid.",
+        "data": {"invite_code": new_code},
+    }
 
 
 async def regenerate_role_code(admin: dict[str, Any], role_id: UUID) -> dict[str, Any]:
-    """Generate a replacement invite code for a role."""
-
-    role = await get_role(admin, role_id)
-    company = await get_company(admin)
-    db = get_supabase()
-    new_code = _unique_invite_code(db, company["name"], role["role_name"])
-    after_result = db.table("roles").update({"invite_code": new_code, "code_active": True}).eq("id", str(role_id)).eq("company_id", admin["company_id"]).execute()
-    after = _require_row(after_result.data, "DATABASE_UPDATE_FAILED", "Could not regenerate role code. Please try again.")
-    await write_audit(admin["id"], "admin", "REGENERATE_ROLE_CODE", str(role_id), "role", {"old_code": role["invite_code"], "new_code": new_code})
-    return after
-
-
-async def delete_role(admin: dict[str, Any], role_id: UUID) -> dict[str, Any]:
-    """Delete an empty role."""
-
-    role = await get_role(admin, role_id)
-    if int(role["headcount_filled"]) > 0:
-        raise AppError(400, "ROLE_HAS_WORKERS", "Cannot delete role with active workers. Deactivate it instead.")
-    get_supabase().table("roles").delete().eq("id", str(role_id)).execute()
-    await write_audit(admin["id"], "admin", "DELETE_ROLE", str(role_id), "role", {"before": role})
-    return {"deleted": True}
+    return await regenerate_invite_code(role_id, admin)
 
 
 async def list_workers(
