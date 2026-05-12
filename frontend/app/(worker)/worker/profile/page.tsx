@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
+import { TrustScoreGauge } from "@/components/hr/TrustScoreGauge";
 import { getWorkerBank, getWorkerProfile, unwrapError, updateWorkerProfile } from "@/lib/api";
 import { NIGERIAN_STATES } from "@/lib/constants";
 
@@ -53,8 +54,16 @@ export default function WorkerProfilePage() {
     <main className="bg-background p-6">
       <div className="mx-auto max-w-4xl space-y-6">
         <section className="rounded-xl border border-border bg-white p-6">
-          <h1 className="text-2xl font-bold">Complete your profile</h1>
-          <p className="mt-2 text-sm text-ink-secondary">Profile completeness: {Math.round(score * 100)}%</p>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-bold">Complete your profile</h1>
+              <p className="mt-2 text-sm text-ink-secondary">Profile completeness: {Math.round(score * 100)}%</p>
+            </div>
+            <div className="text-center">
+              <TrustScoreGauge score={Number(profile?.trust_score ?? score * 100)} size={96} />
+              <p className="text-xs font-semibold text-ink-secondary">Trust score</p>
+            </div>
+          </div>
           <div className="mt-3 h-3 rounded-full bg-gray-100"><div className={`h-full rounded-full ${color}`} style={{ width: `${Math.round(score * 100)}%` }} /></div>
           {missing.length > 0 && <div className="mt-4 flex flex-wrap gap-2">{missing.map((field) => <span key={field} className="rounded-full bg-warning-light px-3 py-1 text-xs font-semibold text-warning">{field.replaceAll("_", " ")}</span>)}</div>}
           <div className="mt-6 grid gap-4 md:grid-cols-2">

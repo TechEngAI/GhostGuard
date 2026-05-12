@@ -77,3 +77,42 @@ export const updateWorkerProfile = (data: unknown) => api.put("/worker/profile",
 export const bankLookup = (data: unknown) => api.post("/worker/bank/lookup", data);
 export const bankSubmit = (data: unknown) => api.post("/worker/bank/submit", data);
 export const getWorkerBank = () => api.get("/worker/bank");
+
+// ROLES
+export const getRoles = () => api.get("/admin/roles");
+export const createRole = (data: unknown) => api.post("/admin/roles", data);
+export const updateRole = (id: string, data: unknown) => api.put(`/admin/roles/${id}`, data);
+export const regenerateCode = (id: string) => api.post(`/admin/roles/${id}/regenerate-code`);
+export const deleteRole = (id: string) => api.delete(`/admin/roles/${id}`);
+
+// WORKERS (admin view)
+export const getWorkers = (params?: unknown) => api.get("/admin/workers", { params });
+export const getWorkerDetail = (id: string) => api.get(`/admin/workers/${id}`);
+export const verifyWorkerBank = (id: string, data: unknown) => api.patch(`/admin/workers/${id}/verify-bank`, data);
+export const suspendWorker = (id: string, data: unknown) => api.patch(`/admin/workers/${id}/suspend`, data);
+export const reactivateWorker = (id: string) => api.patch(`/admin/workers/${id}/reactivate`);
+export const reassignWorker = (id: string, data: unknown) => api.patch(`/admin/workers/${id}/reassign`, data);
+export const deleteWorker = (id: string) => api.delete(`/admin/workers/${id}`);
+
+// FRAUD SIGNALS
+export const getFraudSignals = (params?: unknown) => api.get("/admin/fraud-signals", { params });
+
+// ATTENDANCE
+export const checkIn = (data: unknown) => api.post("/worker/attendance/checkin", data);
+export const checkOut = (data: unknown) => api.post("/worker/attendance/checkout", data);
+export const getTodayAttendance = () => api.get("/worker/attendance/today");
+export const getAttendanceHistory = (params?: unknown) => api.get("/worker/attendance/history", { params });
+export const getWorkerAttendanceAdmin = (workerId: string, params?: unknown) => api.get(`/admin/attendance/${workerId}`, { params });
+export const editAttendanceRecord = (recordId: string, data: unknown) => api.patch(`/admin/attendance/${recordId}/edit`, data);
+
+// PAYROLL (admin trigger)
+export const generatePayroll = (data: unknown) => api.post("/admin/payroll/generate", data);
+export const getPayrollRuns = () => api.get("/admin/payroll/runs");
+export const getPayrollResults = (runId: string, params?: unknown) => api.get(`/admin/payroll/${runId}/results`, { params });
+export const downloadPayrollCsv = (runId: string) => api.get(`/admin/payroll/${runId}/csv`, { responseType: "blob" });
+
+// HR PAYROLL
+export const getHrPayrollRuns = () => api.get("/hr/payroll/runs");
+export const getHrPayrollResults = (runId: string, params?: unknown) => api.get(`/hr/payroll/${runId}/results`, { params });
+export const makeWorkerDecision = (runId: string, workerId: string, data: unknown) => api.patch(`/hr/payroll/${runId}/worker/${workerId}/decision`, data);
+export const approvePayroll = (runId: string) => api.post(`/hr/payroll/${runId}/approve`);
