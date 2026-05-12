@@ -7,7 +7,9 @@ from app.auth.schemas import (
     AdminRegisterRequest,
     ForgotPasswordRequest,
     LoginRequest,
+    OtpVerifyRequest,
     RefreshRequest,
+    ResendOtpRequest,
     ResetPasswordRequest,
     WorkerRegisterRequest,
 )
@@ -25,6 +27,16 @@ async def admin_register(payload: AdminRegisterRequest):
 @router.post("/admin/login")
 async def admin_login(payload: LoginRequest):
     return success_response(await service.login_user("admin", payload), "Login successful.")
+
+
+@router.post("/admin/verify-otp")
+async def admin_verify_otp(payload: OtpVerifyRequest):
+    return success_response(await service.verify_otp("admin", payload), "Account verified successfully.")
+
+
+@router.post("/admin/resend-otp")
+async def admin_resend_otp(payload: ResendOtpRequest):
+    return success_response(await service.resend_otp("admin", payload), "Verification email resent.")
 
 
 @router.post("/admin/refresh")
@@ -55,6 +67,16 @@ async def worker_register(payload: WorkerRegisterRequest):
 @router.post("/worker/login")
 async def worker_login(payload: LoginRequest):
     return success_response(await service.login_user("worker", payload), "Login successful.")
+
+
+@router.post("/worker/verify-otp")
+async def worker_verify_otp(payload: OtpVerifyRequest):
+    return success_response(await service.verify_otp("worker", payload), "Account verified successfully.")
+
+
+@router.post("/worker/resend-otp")
+async def worker_resend_otp(payload: ResendOtpRequest):
+    return success_response(await service.resend_otp("worker", payload), "Verification email resent.")
 
 
 @router.post("/worker/refresh")

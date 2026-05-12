@@ -2,20 +2,29 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi.encoders import jsonable_encoder
+from supabase import create_client
 
 from app.auth.schemas import (
     AdminRegisterRequest,
     ForgotPasswordRequest,
     LoginRequest,
+    OtpVerifyRequest,
     RefreshRequest,
+    ResendOtpRequest,
     ResetPasswordRequest,
     WorkerRegisterRequest,
 )
+from app.config import get_settings
 from app.database import get_supabase
 from app.errors import AppError
 from app.profile import calculate_completeness
 
 UserType = Literal["admin", "worker"]
+
+
+def _auth_client():
+    settings = get_settings()
+    return create_client(settings.supabase_url, settings.supabase_anon_key).auth
 
 
 def _auth_user_id(auth_response: Any) -> str:
@@ -30,6 +39,18 @@ def _auth_session(auth_response: Any) -> Any:
     if not session:
         raise AppError(401, "INVALID_CREDENTIALS", "Invalid credentials.")
     return session
+
+
+def _signup_options(user_type: UserType, first_name: str, last_name: str, email: str) -> dict[str, Any]:
+    settings = get_settings()
+    return {
+        "data": {
+            "user_type": user_type,
+            "first_name": first_name,
+            "last_name": last_name,
+        },
+        "email_redirect_to": f"{settings.frontend_url}/{user_type}/verify?email={email}",
+    }
 
 
 def _table_for(user_type: UserType) -> str:
@@ -61,17 +82,11 @@ async def register_admin(payload: AdminRegisterRequest) -> dict[str, Any]:
         raise AppError(409, "PHONE_ALREADY_EXISTS", "An admin with this phone number already exists.", "phone_number")
 
     try:
-        auth_response = db.auth.sign_up(
+        auth_response = _auth_client().sign_up(
             {
                 "email": email,
                 "password": payload.password,
-                "options": {
-                    "data": {
-                        "user_type": "admin",
-                        "first_name": payload.first_name,
-                        "last_name": payload.last_name,
-                    }
-                },
+                "options": _signup_options("admin", payload.first_name, payload.last_name, email),
             }
         )
     except Exception as exc:
@@ -118,17 +133,11 @@ async def register_worker(payload: WorkerRegisterRequest) -> dict[str, Any]:
         raise AppError(409, "PHONE_ALREADY_EXISTS", "A worker with this phone number already exists.", "phone_number")
 
     try:
-        auth_response = db.auth.sign_up(
+        auth_response = _auth_client().sign_up(
             {
                 "email": email,
                 "password": payload.password,
-                "options": {
-                    "data": {
-                        "user_type": "worker",
-                        "first_name": payload.first_name,
-                        "last_name": payload.last_name,
-                    }
-                },
+                "options": _signup_options("worker", payload.first_name, payload.last_name, email),
             }
         )
     except Exception as exc:
@@ -220,9 +229,59 @@ async def forgot_password(payload: ForgotPasswordRequest) -> dict[str, Any]:
     """Ask Supabase Auth to send a password reset email."""
 
     try:
-        get_supabase().auth.reset_password_for_email(str(payload.email).lower())
+        settings = get_settings()
+        try:
+            _auth_client().reset_password_for_email(str(payload.email).lower(), {"redirect_to": f"{settings.frontend_url}/reset-password"})
+        except TypeError:
+            _auth_client().reset_password_for_email(str(payload.email).lower())
     except Exception as exc:
         raise AppError(400, "PASSWORD_RESET_FAILED", "Unable to send password reset email.") from exc
+    return {"sent": True}
+
+
+async def verify_otp(user_type: UserType, payload: OtpVerifyRequest) -> dict[str, Any]:
+    """Verify a Supabase signup OTP and return a session for the linked profile."""
+
+    email = str(payload.email).lower()
+    try:
+        response = _auth_client().verify_otp({"email": email, "token": payload.otp, "type": "signup"})
+    except Exception as exc:
+        raise AppError(400, "INVALID_OTP", "Invalid or expired verification code.") from exc
+    session = _auth_session(response)
+    user = getattr(response, "user", None)
+    if not user:
+        raise AppError(400, "INVALID_OTP", "Invalid or expired verification code.")
+    db = get_supabase()
+    rows = db.table(_table_for(user_type)).select("*").eq("auth_user_id", user.id).limit(1).execute().data
+    if not rows:
+        raise AppError(404, "NOT_FOUND", f"{user_type.title()} profile was not found.")
+    return {
+        "access_token": session.access_token,
+        "refresh_token": session.refresh_token,
+        "token_type": "bearer",
+        "user_type": user_type,
+        "profile": _public_profile(rows[0]),
+    }
+
+
+async def resend_otp(user_type: UserType, payload: ResendOtpRequest) -> dict[str, Any]:
+    """Ask Supabase Auth to resend the signup OTP email."""
+
+    email = str(payload.email).lower()
+    settings = get_settings()
+    try:
+        try:
+            _auth_client().resend(
+                {
+                    "type": "signup",
+                    "email": email,
+                    "options": {"email_redirect_to": f"{settings.frontend_url}/{user_type}/verify?email={email}"},
+                }
+            )
+        except TypeError:
+            _auth_client().resend({"type": "signup", "email": email})
+    except Exception as exc:
+        raise AppError(400, "OTP_RESEND_FAILED", "Unable to resend verification email.") from exc
     return {"sent": True}
 
 
