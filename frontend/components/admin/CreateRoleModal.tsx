@@ -5,7 +5,7 @@ import toast from "react-hot-toast";
 import { InviteCodeDisplay } from "@/components/admin/InviteCodeDisplay";
 import { Modal } from "@/components/shared/Modal";
 import { createRole, unwrapError } from "@/lib/api";
-import { unwrapData } from "@/lib/utils";
+import { formatNumber, parseIntegerFromFormattedString, unwrapData } from "@/lib/utils";
 
 const initial = { role_name: "", department: "", grade_level: "", headcount_max: 1, gross_salary: 0, pension_deduct: 0, health_deduct: 0, other_deductions: 0, work_type: "ONSITE" };
 
@@ -43,10 +43,21 @@ export function CreateRoleModal({ open, onClose, onCreated }: { open: boolean; o
               <input required={field === "role_name"} value={form[field]} onChange={(e) => setForm({ ...form, [field]: e.target.value })} className="mt-1 w-full rounded-lg border border-border px-3 py-2" />
             </label>
           ))}
-          {["headcount_max", "gross_salary", "pension_deduct", "health_deduct", "other_deductions"].map((field) => (
+          <label className="text-sm font-semibold capitalize">
+            headcount max
+            <input type="number" min="0" value={form.headcount_max} onChange={(e) => setForm({ ...form, headcount_max: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-border px-3 py-2" />
+          </label>
+          {["gross_salary", "pension_deduct", "health_deduct", "other_deductions"].map((field) => (
             <label key={field} className="text-sm font-semibold capitalize">
               {field.replaceAll("_", " ")}
-              <input type="number" min="0" value={form[field]} onChange={(e) => setForm({ ...form, [field]: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-border px-3 py-2" />
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9,]*"
+                value={formatNumber(form[field])}
+                onChange={(e) => setForm({ ...form, [field]: parseIntegerFromFormattedString(e.target.value) })}
+                className="mt-1 w-full rounded-lg border border-border px-3 py-2"
+              />
             </label>
           ))}
           <div className="md:col-span-2">

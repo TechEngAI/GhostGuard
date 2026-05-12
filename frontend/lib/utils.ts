@@ -5,6 +5,17 @@ export const cn = (...inputs: Array<string | false | null | undefined>) => clsx(
 export const formatNGN = (amount: number) =>
   new Intl.NumberFormat("en-NG", { style: "currency", currency: "NGN", minimumFractionDigits: 0 }).format(Number(amount || 0));
 
+export const formatNumber = (value: number | string) => {
+  const parsed = Number(String(value).replace(/[^0-9]/g, ""));
+  if (Number.isNaN(parsed)) return "";
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(parsed);
+};
+
+export const parseIntegerFromFormattedString = (value: string) => {
+  const cleaned = String(value).replace(/[^0-9]/g, "");
+  return cleaned === "" ? 0 : Number(cleaned);
+};
+
 export const relativeTime = (dateString: string) => {
   const diff = Date.now() - new Date(dateString).getTime();
   const minutes = Math.floor(diff / 60000);
