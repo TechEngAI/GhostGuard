@@ -29,12 +29,22 @@ def _require_row(data: Any, code: str, message: str) -> dict[str, Any]:
 
 
 def _unique_invite_code(db: Any, company_name: str, role_name: str) -> str:
+    if not company_name or not role_name:
+        raise AppError(400, "INVALID_INPUT", "Company name and role name are required.")
+    
     max_attempts = 10
     for attempt in range(max_attempts):
         code = _invite_code(company_name, role_name)
-        existing = db.table("roles").select("id").eq("invite_code", code).maybe_single().execute()
-        if not existing.data:
-            return code
+        try:
+            existing = db.table("roles").select("id").eq("invite_code", code).maybe_single().execute()
+            if existing is None:
+                raise AppError(500, "DATABASE_QUERY_FAILED", "Database query returned no response. Please try again.")
+            if not existing.data:
+                return code
+        except Exception as e:
+            if isinstance(e, AppError):
+                raise
+            raise AppError(500, "DATABASE_QUERY_FAILED", f"Failed to check invite code uniqueness: {str(e)}")
         if attempt == max_attempts - 1:
             raise AppError(500, "CODE_GENERATION_FAILED", "Could not generate unique code. Try again.")
     raise AppError(500, "CODE_GENERATION_FAILED", "Could not generate unique code. Try again.")
@@ -68,11 +78,27 @@ async def create_role(admin: dict[str, Any], payload: RoleCreate) -> dict[str, A
 
     db = get_supabase()
     company = await get_company(admin)
+    
+    # Verify company data before using it
+    if not company or not isinstance(company, dict):
+        raise AppError(500, "INVALID_COMPANY_DATA", "Company data is corrupted. Please try again.")
+    if not company.get("name"):
+        raise AppError(500, "MISSING_COMPANY_NAME", "Company name is missing. Please update company profile.")
+    
     role_data = jsonable_encoder(payload)
     role_data["company_id"] = admin["company_id"]
     role_data["invite_code"] = _unique_invite_code(db, company["name"], payload.role_name)
-    role_result = db.table("roles").insert(role_data).execute()
-    role = _require_row(role_result.data, "DATABASE_INSERT_FAILED", "Could not create role. Please try again.")
+    
+    try:
+        role_result = db.table("roles").insert(role_data).execute()
+        if role_result is None:
+            raise AppError(500, "DATABASE_INSERT_FAILED", "Database insert returned no response. Please try again.")
+        role = _require_row(role_result.data, "DATABASE_INSERT_FAILED", "Could not create role. Please try again.")
+    except AppError:
+        raise
+    except Exception as e:
+        raise AppError(500, "DATABASE_INSERT_FAILED", f"Could not create role: {str(e)}")
+    
     await write_audit(admin["id"], "admin", "CREATE_ROLE", role["id"], "role", {"after": role})
     return role
 
