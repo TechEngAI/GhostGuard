@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.dependencies import get_current_worker
 from app.errors import success_response
@@ -23,6 +23,15 @@ async def update_profile(payload: WorkerProfileUpdate, worker: dict[str, Any] = 
 @router.post("/bank/lookup")
 async def bank_lookup(payload: BankLookupRequest, worker: dict[str, Any] = Depends(get_current_worker)):
     return success_response(await service.bank_lookup(payload), "Bank account retrieved.")
+
+
+@router.post("/bank/lookup/debug")
+async def bank_lookup_debug(request: Request):
+    """Temporary debug endpoint — remove after fixing."""
+    body = await request.json()
+    print(f"DEBUG bank lookup body: {body}")
+    print(f"DEBUG content-type: {request.headers.get('content-type')}")
+    return {"received": body, "content_type": request.headers.get("content-type")}
 
 
 @router.post("/bank/submit")
