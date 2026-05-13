@@ -1,7 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
-from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 
 from app.auth.schemas import (
@@ -22,9 +21,9 @@ from app.profile import calculate_completeness
 UserType = Literal["admin", "worker"]
 
 
-def _require_db_result(result: Any, message: str = "Database returned no response.") -> Any:
+def _require_db_result(result: Any, message: str = "Database operation returned no response.") -> Any:
     if result is None:
-        raise HTTPException(status_code=500, detail=message)
+        raise AppError(500, "DATABASE_NO_RESPONSE", message)
     return result
 
 
@@ -132,16 +131,28 @@ def _user_email(user: Any, fallback: str | None = None) -> str | None:
 
 
 def _email_exists(table: str, email: str) -> bool:
-    result = get_supabase().table(table).select("id").eq("email", email.lower()).maybe_single().execute()
-    _require_db_result(result)
+    try:
+        result = get_supabase().table(table).select("id").eq("email", email.lower()).maybe_single().execute()
+    except Exception as exc:
+        print(f"Email existence check failed for {table}: {exc}")
+        return False
+    if result is None:
+        print(f"Email existence check returned no response for {table}; continuing signup.")
+        return False
     return bool(result.data)
 
 
 def _phone_exists(table: str, phone_number: str | None) -> bool:
     if not phone_number:
         return False
-    result = get_supabase().table(table).select("id").eq("phone_number", phone_number).maybe_single().execute()
-    _require_db_result(result)
+    try:
+        result = get_supabase().table(table).select("id").eq("phone_number", phone_number).maybe_single().execute()
+    except Exception as exc:
+        print(f"Phone existence check failed for {table}: {exc}")
+        return False
+    if result is None:
+        print(f"Phone existence check returned no response for {table}; continuing signup.")
+        return False
     return bool(result.data)
 
 
@@ -204,12 +215,13 @@ async def register_admin(payload: AdminRegisterRequest) -> dict[str, Any]:
         admin_result = db.table("admins").insert(jsonable_encoder(admin_payload)).execute()
         _require_db_result(admin_result)
         admin = _require_inserted(admin_result.data, "DATABASE_INSERT_FAILED", "Could not create admin profile. Please try again.")
+        try:
+            _resend_signup_otp(email, "admin")
+        except Exception as otp_err:
+            print(f"Admin signup OTP resend failed for {email}: {otp_err}")
         await write_audit(admin["id"], "admin", "CREATE_COMPANY", company["id"], "company", {"after": company})
         return {"admin": _public_profile(admin), "company": company}
     except AppError:
-        _delete_auth_user_quietly(auth_user_id)
-        raise
-    except HTTPException:
         _delete_auth_user_quietly(auth_user_id)
         raise
     except Exception as exc:
@@ -223,9 +235,12 @@ async def register_worker(payload: WorkerRegisterRequest) -> dict[str, Any]:
 
     db = get_supabase()
     email = str(payload.email).lower()
-    role_result = db.table("roles").select("*").eq("invite_code", payload.invite_code).eq("code_active", True).maybe_single().execute()
-    _require_db_result(role_result)
-    if not role_result.data:
+    try:
+        role_result = db.table("roles").select("*").eq("invite_code", payload.invite_code).eq("code_active", True).maybe_single().execute()
+    except Exception as exc:
+        print(f"Invite code lookup failed: {exc}")
+        raise AppError(400, "INVALID_INVITE_CODE", "Invalid or expired invite code.", "invite_code") from exc
+    if role_result is None or not role_result.data:
         raise AppError(400, "INVALID_INVITE_CODE", "Invalid or expired invite code.", "invite_code")
     role = role_result.data
     if int(role["headcount_filled"]) >= int(role["headcount_max"]):
@@ -258,17 +273,29 @@ async def register_worker(payload: WorkerRegisterRequest) -> dict[str, Any]:
         worker_payload["status"] = "PENDING_BANK"
         worker_payload["completeness_score"] = calculate_completeness(worker_payload)
         worker_result = db.table("workers").insert(jsonable_encoder(worker_payload)).execute()
-        _require_db_result(worker_result)
-        worker = _require_inserted(worker_result.data, "DATABASE_INSERT_FAILED", "Could not create worker profile. Please try again.")
+        if worker_result is None:
+            print(f"Worker insert returned no response for {email}; checking whether the profile was created.")
+            lookup_result = db.table("workers").select("*").eq("auth_user_id", auth_user_id).maybe_single().execute()
+            worker = lookup_result.data if lookup_result is not None else None
+            if not worker:
+                lookup_result = db.table("workers").select("*").eq("email", email).maybe_single().execute()
+                worker = lookup_result.data if lookup_result is not None else None
+            if not worker:
+                raise AppError(500, "DATABASE_INSERT_FAILED", "Could not create worker profile. Please try again.")
+        else:
+            worker = _require_inserted(worker_result.data, "DATABASE_INSERT_FAILED", "Could not create worker profile. Please try again.")
         role_update = db.table("roles").update({"headcount_filled": int(role["headcount_filled"]) + 1}).eq("id", role["id"]).execute()
-        _require_db_result(role_update)
-        _require_inserted(role_update.data, "DATABASE_UPDATE_FAILED", "Could not update role headcount. Please try again.")
+        if role_update is None:
+            print(f"Role headcount update returned no response for role {role['id']}; worker signup will continue.")
+        elif not role_update.data:
+            print(f"Role headcount update returned no data for role {role['id']}; worker signup will continue.")
+        try:
+            _resend_signup_otp(email, "worker")
+        except Exception as otp_err:
+            print(f"Worker signup OTP resend failed for {email}: {otp_err}")
         await write_audit(worker["id"], "worker", "REGISTER_WORKER", worker["id"], "worker", {"role_id": role["id"]})
         return {"worker": _public_profile(worker), "role": role}
     except AppError:
-        _delete_auth_user_quietly(auth_user_id)
-        raise
-    except HTTPException:
         _delete_auth_user_quietly(auth_user_id)
         raise
     except Exception as exc:
