@@ -118,27 +118,49 @@ async def get_current_worker(
     print(f"Auth validated for user: {auth_user_id}")
 
     # Load worker profile from workers table
+    worker_data = None
     try:
-        worker_result = get_supabase_db_client().table("workers").select(
-            "*, roles(id, role_name, department, gross_salary, pension_deduct, "
-            "health_deduct, other_deductions, work_type, geofence_radius), "
-            "companies(id, name, office_lat, office_lng, geofence_radius, "
-            "work_start_time, work_end_time, working_days, timezone)"
-        ).eq(
+        worker_result = get_supabase_db_client().table("workers").select("*").eq(
             "auth_user_id", auth_user_id
         ).maybe_single().execute()
+        worker_data = worker_result.data if worker_result is not None else None
     except Exception as e:
         print(f"Worker DB query exception: {type(e).__name__}: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "code": "DATABASE_ERROR",
-                "message": "Could not load your profile. Please try again."
-            }
-        )
+        if "Missing response" in str(e):
+            print("Worker DB query fallback: retrying without maybe_single().")
+            try:
+                fallback_result = get_supabase_db_client().table("workers").select("*").eq(
+                    "auth_user_id", auth_user_id
+                ).limit(1).execute()
+                if fallback_result is not None:
+                    fallback_data = fallback_result.data
+                    if isinstance(fallback_data, list) and len(fallback_data) > 0:
+                        worker_data = fallback_data[0]
+                    else:
+                        worker_data = None
+            except Exception as ex2:
+                print(f"Worker DB fallback query exception: {type(ex2).__name__}: {str(ex2)}")
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "code": "DATABASE_ERROR",
+                        "message": "Could not load your profile. Please try again."
+                    }
+                )
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "DATABASE_ERROR",
+                    "message": "Could not load your profile. Please try again."
+                }
+            )
+
+    if isinstance(worker_data, list):
+        worker_data = worker_data[0] if worker_data else None
 
     # Check worker record exists
-    if not worker_result or not worker_result.data:
+    if not worker_data:
         print(f"No worker found for auth_user_id: {auth_user_id}")
         raise HTTPException(
             status_code=403,
@@ -148,7 +170,7 @@ async def get_current_worker(
             }
         )
 
-    worker = worker_result.data
+    worker = worker_data
 
     # Check account status — never allow suspended or deleted workers
     status = worker.get("status", "")
