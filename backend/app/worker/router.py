@@ -1,9 +1,10 @@
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
+from pydantic import ValidationError
 
 from app.dependencies import get_current_worker
-from app.errors import success_response
+from app.errors import AppError, success_response
 from app.worker import service
 from app.worker.schemas import BankChangeRequest, BankLookupRequest, BankSubmitRequest, WorkerProfileUpdate
 
@@ -24,11 +25,13 @@ async def update_profile(payload: WorkerProfileUpdate, worker: dict[str, Any] = 
 async def bank_lookup(payload: BankLookupRequest, worker: dict[str, Any] = Depends(get_current_worker)):
     try:
         return success_response(await service.bank_lookup(payload), "Bank account retrieved.")
+    except ValidationError as exc:
+        raise AppError(422, "VALIDATION_ERROR", "Bank lookup request is malformed. Ensure account_number and bank_code are valid.") from exc
     except AppError:
         raise
-    except Exception as e:
-        print(f"Unexpected error in bank_lookup: {e}")
-        raise AppError(422, "BANK_LOOKUP_FAILED", "Unable to verify this account. Check the details and try again.")
+    except Exception as exc:
+        print(f"Unexpected error in bank_lookup: {exc}")
+        raise AppError(500, "BANK_LOOKUP_ERROR", "Unable to verify bank account at this time.") from exc
 
 
 @router.post("/bank/lookup/debug")

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     supabase_service_key: str = Field(..., alias="SUPABASE_SERVICE_KEY")
     squad_secret_key: str = Field(..., alias="SQUAD_SECRET_KEY")
     squad_base_url: str = Field("https://sandbox-api-d.squadco.com", alias="SQUAD_BASE_URL")
+    squad_account_lookup_path: str = Field("/account/lookup", alias="SQUAD_ACCOUNT_LOOKUP_PATH")
     environment: str = Field("development", alias="ENVIRONMENT")
     frontend_url: str = Field("http://localhost:3000", alias="FRONTEND_URL")
 

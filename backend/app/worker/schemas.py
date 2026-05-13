@@ -18,12 +18,12 @@ class WorkerProfileUpdate(BaseModel):
 
 class BankLookupRequest(BaseModel):
     account_number: str = Field(..., min_length=10, max_length=10, pattern=r"^\d{10}$")
-    bank_code: str = Field(..., min_length=2, max_length=10)
+    bank_code: str = Field(..., min_length=2, max_length=10, pattern=r"^\d+$")
 
 
 class BankSubmitRequest(BaseModel):
     account_number: str = Field(..., min_length=10, max_length=10, pattern=r"^\d{10}$")
-    bank_code: str = Field(..., min_length=2, max_length=10)
+    bank_code: str = Field(..., min_length=2, max_length=10, pattern=r"^\d+$")
     bank_name: str
     confirmed_account_name: str
 
