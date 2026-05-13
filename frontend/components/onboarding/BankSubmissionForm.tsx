@@ -57,7 +57,11 @@ export function BankSubmissionForm() {
         bank_name: bank.name,
         confirmed_account_name: lookup.account_name,
       });
-      setResult(response.data.data?.match_status || response.data.data?.status || "AUTO_VERIFIED");
+      setResult(
+        response.data.data?.bank_account?.match_status ||
+        response.data.data?.worker?.status ||
+        "AUTO_VERIFIED"
+      );
       setStep(3);
     } catch (error) {
       toast.error(unwrapError(error));

@@ -29,7 +29,7 @@ export default function WorkerProfilePage() {
         setForm(Object.fromEntries(fields.map((field) => [field, data?.[field] || ""])));
         try {
           const bankResponse = await getWorkerBank();
-          setBank(bankResponse.data.data?.bank || bankResponse.data.data);
+          setBank(bankResponse.data.data?.bank_account || bankResponse.data.data);
         } catch {}
       } catch (error) {
         toast.error(unwrapError(error));
