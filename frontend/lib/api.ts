@@ -74,8 +74,8 @@ export const updateCompany = (data: unknown) => api.put("/admin/company", data);
 
 export const getWorkerProfile = () => api.get("/worker/profile");
 export const updateWorkerProfile = (data: unknown) => api.put("/worker/profile", data);
-export const bankLookup = (data: unknown) => api.post("/worker/bank/lookup", data);
-export const bankSubmit = (data: unknown) => api.post("/worker/bank/submit", data);
+export const bankLookup = (data: unknown) => api.post("/worker/bank/lookup", data, { headers: { "Content-Type": "application/json" } });
+export const bankSubmit = (data: unknown) => api.post("/worker/bank/submit", data, { headers: { "Content-Type": "application/json" } });
 export const getWorkerBank = () => api.get("/worker/bank");
 
 // ROLES

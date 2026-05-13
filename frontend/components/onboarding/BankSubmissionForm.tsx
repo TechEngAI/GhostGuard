@@ -26,6 +26,7 @@ export function BankSubmissionForm() {
   useEffect(() => {
     if (accountNumber.length !== 10 || !bankCode) {
       setLookup(null);
+      setLookupError("");
       return;
     }
     let cancelled = false;
@@ -35,8 +36,8 @@ export function BankSubmissionForm() {
       try {
         const response = await bankLookup({ account_number: accountNumber, bank_code: bankCode });
         if (!cancelled) setLookup(response.data.data);
-      } catch {
-        if (!cancelled) setLookupError("Account not found. Check the number and try again.");
+      } catch (error) {
+        if (!cancelled) setLookupError(unwrapError(error));
       } finally {
         if (!cancelled) setLoadingLookup(false);
       }
