@@ -17,7 +17,7 @@ async def lookup_account(account_number: str, bank_code: str, squad_secret_key: 
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-    payload = {"account_number": account_number, "bank_code": int(bank_code)}
+    payload = {"account_number": account_number, "bank_code": bank_code}
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         for path in paths:

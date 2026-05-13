@@ -1,5 +1,5 @@
 from datetime import date
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class WorkerProfileUpdate(BaseModel):
@@ -18,17 +18,53 @@ class WorkerProfileUpdate(BaseModel):
 
 class BankLookupRequest(BaseModel):
     account_number: str = Field(..., min_length=10, max_length=10, pattern=r"^\d{10}$")
-    bank_code: str = Field(..., min_length=2, max_length=10, pattern=r"^\d+$")
+    bank_code: str = Field(..., min_length=2, max_length=10)
+
+    @field_validator("bank_code", mode="before")
+    @classmethod
+    def coerce_bank_code(cls, v: any) -> str:
+        """Convert integer bank_code to string; ensure numeric pattern."""
+        if isinstance(v, int):
+            v = str(v)
+        if not isinstance(v, str):
+            raise ValueError("bank_code must be a string or integer")
+        if not v.isdigit():
+            raise ValueError("bank_code must contain only digits")
+        return v
 
 
 class BankSubmitRequest(BaseModel):
     account_number: str = Field(..., min_length=10, max_length=10, pattern=r"^\d{10}$")
-    bank_code: str = Field(..., min_length=2, max_length=10, pattern=r"^\d+$")
+    bank_code: str = Field(..., min_length=2, max_length=10)
     bank_name: str
     confirmed_account_name: str
+
+    @field_validator("bank_code", mode="before")
+    @classmethod
+    def coerce_bank_code(cls, v: any) -> str:
+        """Convert integer bank_code to string; ensure numeric pattern."""
+        if isinstance(v, int):
+            v = str(v)
+        if not isinstance(v, str):
+            raise ValueError("bank_code must be a string or integer")
+        if not v.isdigit():
+            raise ValueError("bank_code must contain only digits")
+        return v
 
 
 class BankChangeRequest(BaseModel):
     new_account_number: str = Field(..., min_length=10, max_length=10, pattern=r"^\d{10}$")
     new_bank_code: str = Field(..., min_length=2, max_length=10)
     reason: str
+
+    @field_validator("new_bank_code", mode="before")
+    @classmethod
+    def coerce_new_bank_code(cls, v: any) -> str:
+        """Convert integer new_bank_code to string; ensure numeric pattern."""
+        if isinstance(v, int):
+            v = str(v)
+        if not isinstance(v, str):
+            raise ValueError("new_bank_code must be a string or integer")
+        if not v.isdigit():
+            raise ValueError("new_bank_code must contain only digits")
+        return v
