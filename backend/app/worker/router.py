@@ -34,6 +34,21 @@ async def bank_lookup_debug(request: Request):
     return {"received": body, "content_type": request.headers.get("content-type")}
 
 
+@router.get("/bank/auth-debug")
+async def auth_debug(
+    request: Request,
+    current_worker: dict = Depends(get_current_worker),
+):
+    """Temporary — remove after debugging."""
+    return {
+        "worker_id": current_worker.get("id"),
+        "status": current_worker.get("status"),
+        "bank_verified": current_worker.get("bank_verified"),
+        "auth_header_present": bool(request.headers.get("authorization")),
+        "message": "JWT dependency working correctly",
+    }
+
+
 @router.post("/bank/submit")
 async def bank_submit(payload: BankSubmitRequest, worker: dict[str, Any] = Depends(get_current_worker)):
     return success_response(await service.submit_bank(worker, payload), "Bank account submitted.")

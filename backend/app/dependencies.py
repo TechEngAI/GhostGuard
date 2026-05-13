@@ -1,8 +1,8 @@
-from typing import Any
+from typing import Any, Optional
 
-from fastapi import Header
+from fastapi import Header, HTTPException, Request
 
-from app.database import get_supabase, get_supabase_auth_client
+from app.database import get_supabase, get_supabase_auth_client, get_supabase_db_client
 from app.errors import AppError
 
 
@@ -51,14 +51,126 @@ def get_current_admin(authorization: str | None = Header(None)) -> dict[str, Any
     return admin
 
 
-def get_current_worker(authorization: str | None = Header(None)) -> dict[str, Any]:
-    """Resolve the authenticated worker from a bearer access token."""
+async def get_current_worker(
+    authorization: Optional[str] = Header(default=None)
+) -> dict:
+    """
+    Validate worker JWT and return worker profile dict.
+    Every error raises HTTPException — never a raw Python exception.
+    Raw exceptions cause FastAPI to return 422 instead of the correct status code.
+    """
 
-    worker = _current_profile(authorization, "worker")
-    if worker.get("status") == "SUSPENDED":
-        raise AppError(403, "ACCOUNT_SUSPENDED", "Worker account is suspended.")
-    if worker.get("status") == "DELETED":
-        raise AppError(403, "ACCOUNT_DELETED", "Worker account has been deleted.")
+    # Check Authorization header exists
+    if not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "MISSING_TOKEN",
+                "message": "Authorization header is required. Please log in."
+            }
+        )
+
+    # Extract the Bearer token
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "INVALID_TOKEN_FORMAT",
+                "message": "Authorization header must be in format: Bearer {token}"
+            }
+        )
+
+    token = authorization[7:].strip()  # Remove "Bearer " prefix
+
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "EMPTY_TOKEN",
+                "message": "Token is empty. Please log in again."
+            }
+        )
+
+    # Validate token with Supabase Auth
+    try:
+        auth_response = get_supabase_auth_client().auth.get_user(token)
+    except Exception as e:
+        print(f"Supabase auth.get_user() exception: {type(e).__name__}: {str(e)}")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "TOKEN_VALIDATION_FAILED",
+                "message": "Could not validate your session. Please log in again."
+            }
+        )
+
+    # Supabase returns response object — user may be None if token invalid/expired
+    if not auth_response or not auth_response.user:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "INVALID_OR_EXPIRED_TOKEN",
+                "message": "Your session has expired. Please log in again."
+            }
+        )
+
+    auth_user_id = auth_response.user.id
+    print(f"Auth validated for user: {auth_user_id}")
+
+    # Load worker profile from workers table
+    try:
+        worker_result = get_supabase_db_client().table("workers").select(
+            "*, roles(id, role_name, department, gross_salary, pension_deduct, "
+            "health_deduct, other_deductions, work_type, geofence_radius), "
+            "companies(id, name, office_lat, office_lng, geofence_radius, "
+            "work_start_time, work_end_time, working_days, timezone)"
+        ).eq(
+            "auth_user_id", auth_user_id
+        ).maybe_single().execute()
+    except Exception as e:
+        print(f"Worker DB query exception: {type(e).__name__}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "DATABASE_ERROR",
+                "message": "Could not load your profile. Please try again."
+            }
+        )
+
+    # Check worker record exists
+    if not worker_result or not worker_result.data:
+        print(f"No worker found for auth_user_id: {auth_user_id}")
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "NOT_A_WORKER",
+                "message": "This account does not have worker access."
+            }
+        )
+
+    worker = worker_result.data
+
+    # Check account status — never allow suspended or deleted workers
+    status = worker.get("status", "")
+    if status == "SUSPENDED":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "ACCOUNT_SUSPENDED",
+                "message": "Your account has been suspended. Contact your administrator."
+            }
+        )
+
+    if status == "DELETED":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "ACCOUNT_DELETED",
+                "message": "This account no longer exists."
+            }
+        )
+
+    print(f"Worker loaded: id={worker.get('id')}, status={status}, bank_verified={worker.get('bank_verified')}")
     return worker
 
 
