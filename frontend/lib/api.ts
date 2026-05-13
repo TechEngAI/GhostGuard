@@ -74,8 +74,22 @@ export const updateCompany = (data: unknown) => api.put("/admin/company", data);
 
 export const getWorkerProfile = () => api.get("/worker/profile");
 export const updateWorkerProfile = (data: unknown) => api.put("/worker/profile", data);
-export const bankLookup = (data: unknown) => api.post("/worker/bank/lookup", data, { headers: { "Content-Type": "application/json" } });
-export const bankSubmit = (data: unknown) => api.post("/worker/bank/submit", data, { headers: { "Content-Type": "application/json" } });
+export const bankLookup = (data: unknown) => {
+  const payload = data as Record<string, any>;
+  return api.post("/worker/bank/lookup", {
+    account_number: String(payload.account_number),
+    bank_code: String(payload.bank_code),
+  }, { headers: { "Content-Type": "application/json" } });
+};
+export const bankSubmit = (data: unknown) => {
+  const payload = data as Record<string, any>;
+  return api.post("/worker/bank/submit", {
+    account_number: String(payload.account_number),
+    bank_code: String(payload.bank_code),
+    bank_name: payload.bank_name,
+    confirmed_account_name: payload.confirmed_account_name,
+  }, { headers: { "Content-Type": "application/json" } });
+};
 export const getWorkerBank = () => api.get("/worker/bank");
 
 // ROLES

@@ -2,7 +2,9 @@
 
 import { createContext, ReactNode, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import toast from "react-hot-toast";
 import { clearTokens, getUserType } from "@/lib/auth";
+import { useIdleTimeout } from "@/hooks/useIdleTimeout";
 import type { UserType } from "@/types";
 
 type AuthContextValue = {
@@ -22,6 +24,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [userType, setUserType] = useState<UserType | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Initialize idle timeout monitoring when user is authenticated
+  useIdleTimeout();
+
   useEffect(() => {
     setUserType(getUserType());
     setIsLoading(false);
@@ -39,6 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearTokens();
         setUser(null);
         setUserType(null);
+        toast.success("Logged out successfully.", { duration: 2000 });
         router.push(`/${type || "admin"}/login`);
       },
     }),
