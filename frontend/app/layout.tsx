@@ -11,11 +11,15 @@ export const metadata: Metadata = {
   description: "AI-powered ghost worker detection for payroll teams.",
 };
 
+import { DarkModeProvider } from "@/context/DarkModeContext";
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body className={`${inter.variable} font-sans`}>
-        <AuthProvider>{children}</AuthProvider>
+        <DarkModeProvider>
+          <AuthProvider>{children}</AuthProvider>
+        </DarkModeProvider>
         <Toaster position="top-right" toastOptions={{ duration: 3500 }} />
       </body>
     </html>

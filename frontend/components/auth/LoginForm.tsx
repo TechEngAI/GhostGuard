@@ -13,6 +13,8 @@ import { PasswordInput } from "@/components/ui/PasswordInput";
 import { adminLogin, getCompany, hrLogin, unwrapError, workerLogin } from "@/lib/api";
 import { setTokens } from "@/lib/auth";
 import type { UserType } from "@/types";
+import { cn } from "@/lib/utils";
+import { motion } from "framer-motion";
 
 const schema = z.object({
   email: z.string().email(),
@@ -30,7 +32,6 @@ const config = {
 export function LoginForm({ type }: { type: UserType }) {
   const router = useRouter();
   const portal = config[type];
-  const Icon = portal.icon;
   const { register, handleSubmit, formState } = useForm<FormValues>({ resolver: zodResolver(schema) });
 
   async function submit(values: FormValues) {
@@ -56,28 +57,86 @@ export function LoginForm({ type }: { type: UserType }) {
     }
   }
 
+  const container = {
+    hidden: { opacity: 0 },
+    show: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.1,
+      },
+    },
+  };
+
+  const item = {
+    hidden: { opacity: 0, y: 10 },
+    show: { opacity: 1, y: 0 },
+  };
+
   return (
-    <div className="mx-auto w-full max-w-md rounded-xl border border-border bg-white p-8 shadow-soft">
-      <div className="mb-8 text-center">
-        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-brand-light">
-          <Icon className={`h-7 w-7 ${portal.accent}`} />
-        </div>
-        <h1 className="text-2xl font-bold text-ink">GhostGuard</h1>
-        <p className={`mt-1 text-sm font-semibold ${portal.accent}`}>{portal.label}</p>
-      </div>
-      <form className="space-y-5" onSubmit={handleSubmit(submit)}>
-        <Input label="Email address" type="email" error={formState.errors.email?.message} {...register("email")} />
-        <div>
-          <PasswordInput label="Password" error={formState.errors.password?.message} {...register("password")} />
-          <Link href={`/reset-password?type=${type}`} className="mt-2 inline-block text-sm font-medium text-brand hover:text-brand-dark">
-            Forgot password?
-          </Link>
-        </div>
-        <Button className="w-full" isLoading={formState.isSubmitting}>Login</Button>
+    <motion.div variants={container} initial="hidden" animate="show" className="w-full">
+      <form className="space-y-6" onSubmit={handleSubmit(submit)}>
+        <motion.div variants={item}>
+          <Input 
+            label="Email address" 
+            type="email" 
+            placeholder="name@company.com"
+            error={formState.errors.email?.message} 
+            {...register("email")} 
+          />
+        </motion.div>
+        
+        <motion.div variants={item}>
+          <PasswordInput 
+            label="Password" 
+            placeholder="••••••••"
+            error={formState.errors.password?.message} 
+            {...register("password")} 
+          />
+          <div className="flex justify-end mt-1.5">
+            <Link 
+              href={`/reset-password?type=${type}`} 
+              className={cn("text-xs font-bold transition-colors", portal.accent, "hover:opacity-80")}
+            >
+              Forgot password?
+            </Link>
+          </div>
+        </motion.div>
+
+        <motion.div variants={item}>
+          <Button 
+            className={cn("w-full h-12 rounded-xl text-sm font-bold shadow-soft transition-all hover:scale-[1.02] active:scale-[0.98]")}
+            isLoading={formState.isSubmitting}
+          >
+            Login to {portal.label}
+          </Button>
+        </motion.div>
       </form>
-      {type === "admin" && <p className="mt-6 text-center text-sm text-ink-secondary">Don't have an account? <Link className="font-semibold text-brand" href="/admin/register">Register as Admin</Link></p>}
-      {type === "worker" && <p className="mt-6 text-center text-sm text-ink-secondary">New worker? <Link className="font-semibold text-brand" href="/worker/register">Register here</Link><br />You need an invite code from your employer.</p>}
-      {type === "hr" && <p className="mt-6 rounded-lg bg-[#F4F2FF] p-4 text-sm text-ink-secondary">HR accounts are set up by your company administrator. Contact your admin if you haven't received your invitation email.</p>}
-    </div>
+
+      <motion.div variants={item} className="mt-8 pt-6 border-t border-border dark:border-slate-800">
+        {type === "admin" && (
+          <p className="text-center text-sm text-ink-secondary dark:text-gray-400 font-medium">
+            Don't have an account?{" "}
+            <Link className="font-bold text-brand hover:underline underline-offset-4" href="/admin/register">
+              Create admin account
+            </Link>
+          </p>
+        )}
+        {type === "worker" && (
+          <p className="text-center text-sm text-ink-secondary dark:text-gray-400 font-medium">
+            New worker?{" "}
+            <Link className="font-bold text-brand hover:underline underline-offset-4" href="/worker/register">
+              Register with invite code
+            </Link>
+          </p>
+        )}
+        {type === "hr" && (
+          <div className="rounded-2xl bg-brand-light/50 dark:bg-slate-800/50 p-4 border border-brand/10 dark:border-slate-700">
+            <p className="text-xs text-brand-dark dark:text-gray-300 font-medium leading-relaxed">
+              HR accounts are managed by your administrator. Check your inbox for an invitation email if you haven't joined yet.
+            </p>
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
   );
 }

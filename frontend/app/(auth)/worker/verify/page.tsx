@@ -14,6 +14,8 @@ type VerifyData = {
   refresh_token?: string;
 };
 
+import AuthLayout from "@/components/auth/AuthLayout";
+
 function WorkerVerifyContent() {
   const router = useRouter();
   const params = useSearchParams();
@@ -62,7 +64,41 @@ function WorkerVerifyContent() {
       setOtp("");
     }
   }
-  return <main className="flex min-h-screen items-center justify-center bg-background px-4"><div className="rounded-xl border border-border bg-white p-8 text-center shadow-soft"><h1 className="mb-6 text-2xl font-bold">Verify worker account</h1>{isVerifyingLink ? <p className="text-sm text-ink-secondary">Verifying your email...</p> : <><OtpInput value={otp} onChange={setOtp} /><Button className="mt-6" disabled={otp.length !== 6} onClick={verify}>Verify</Button></>}</div></main>;
+
+  return (
+    <AuthLayout
+      portal="worker"
+      title="You're just one step away from joining."
+      subtitle="Verify Worker"
+      features={[
+        "Secure identity confirmation",
+        "Payroll account activation",
+        "Access to your worker dashboard"
+      ]}
+    >
+      <div className="text-center">
+        <h2 className="text-xl font-bold mb-4">Confirm your identity</h2>
+        <p className="text-sm text-ink-secondary mb-8">
+          Please enter the 6-digit verification code we sent to your email address.
+        </p>
+
+        {isVerifyingLink ? (
+          <p className="text-sm text-ink-secondary">Verifying your email...</p>
+        ) : (
+          <>
+            <OtpInput value={otp} onChange={setOtp} />
+            <Button 
+              className="mt-8 w-full h-12 rounded-xl font-bold shadow-soft transition-all hover:scale-[1.02] active:scale-[0.98]" 
+              disabled={otp.length !== 6} 
+              onClick={verify}
+            >
+              Verify & Complete
+            </Button>
+          </>
+        )}
+      </div>
+    </AuthLayout>
+  );
 }
 
 export default function WorkerVerifyPage() {

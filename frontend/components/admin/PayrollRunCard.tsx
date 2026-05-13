@@ -16,7 +16,9 @@ export function PayrollRunCard({ run, hrefPrefix = "/admin/payroll" }: { run: an
         <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-3 py-1 text-amber-700"><ShieldAlert className="h-3 w-3" /> {run.suspicious_count || 0} suspicious</span>
         <span className="rounded-full bg-red-100 px-3 py-1 text-red-700">{run.flagged_count || 0} flagged</span>
       </div>
-      <Link href={`${hrefPrefix}/${run.id || run.payroll_run_id}/results`} className="mt-4 inline-flex text-sm font-semibold text-brand-dark">View results</Link>
+      <Link href={`${hrefPrefix}/${run.id || run.payroll_run_id}`} className="mt-4 inline-flex text-sm font-semibold text-brand-dark hover:underline">
+        View results
+      </Link>
     </article>
   );
 }
