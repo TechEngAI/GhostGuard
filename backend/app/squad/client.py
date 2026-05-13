@@ -8,13 +8,13 @@ async def lookup_account(account_number: str, bank_code: str, squad_secret_key: 
     """Look up a Nigerian bank account through Squad's sandbox API."""
 
     settings = get_settings()
-    url = f"{settings.squad_base_url.rstrip('/')}/payout/account/lookup"
+    url = f"{settings.squad_base_url.rstrip('/')}/account/lookup"
     headers = {
         "Authorization": f"Bearer {squad_secret_key or settings.squad_secret_key}",
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-    payload = {"account_number": account_number, "bank_code": bank_code}
+    payload = {"account_number": account_number, "bank_code": int(bank_code)}
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(url, json=payload, headers=headers)
