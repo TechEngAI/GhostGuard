@@ -74,10 +74,13 @@ export function CompanySetupForm({ mode = "setup" }: CompanySetupFormProps) {
     }
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        setLat(position.coords.latitude);
-        setLng(position.coords.longitude);
+        const lat = position.coords.latitude;    // full precision
+        const lng = position.coords.longitude;   // full precision
+        setLat(lat);
+        setLng(lng);
       },
       () => toast.error("Could not get your location. Please click on the map."),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
     );
   }
 
@@ -86,12 +89,16 @@ export function CompanySetupForm({ mode = "setup" }: CompanySetupFormProps) {
       toast.error("Choose your office location on the map.");
       return;
     }
+    if (radius < 50 || radius > 1000) {
+      toast.error("Geofence radius must be between 50 and 1000 metres.");
+      return;
+    }
     setLoading(true);
     try {
       await updateCompany({
         office_lat: lat,
         office_lng: lng,
-        geofence_radius: radius,
+        geofence_radius: parseInt(String(radius), 10) || 100,
         work_start_time: workStart,
         work_end_time: workEnd,
         working_days: workingDays.join("-"),

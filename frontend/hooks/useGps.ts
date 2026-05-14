@@ -47,7 +47,7 @@ export function useGps() {
           setGps((prev) => ({ ...prev, status: error.code === 1 ? "denied" : "error", error: msg }));
           reject(new Error(msg));
         },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
       );
     });
   }, []);

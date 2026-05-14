@@ -56,6 +56,7 @@ export default function WorkerDashboardPage() {
       const response = await checkIn({ 
         latitude: coords.latitude, 
         longitude: coords.longitude, 
+        accuracy: gps.accuracy, 
         device_id: deviceId, 
         user_agent: navigator.userAgent 
       });
@@ -76,7 +77,8 @@ export default function WorkerDashboardPage() {
       const coords = await getLocation();
       const response = await checkOut({ 
         latitude: coords.latitude, 
-        longitude: coords.longitude 
+        longitude: coords.longitude,
+        accuracy: gps.accuracy
       });
       toast.success(`Checked out. You worked ${unwrapData<any>(response).hours_worked || 0}h today.`);
       const next = await getTodayAttendance();

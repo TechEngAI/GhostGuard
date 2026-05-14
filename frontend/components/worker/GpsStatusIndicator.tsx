@@ -8,7 +8,12 @@ export function GpsStatusIndicator({ gps, isRemote = false, distance, radius = 1
   return (
     <div className={`rounded-lg border p-4 text-sm ${inRange ? "border-green-200 bg-green-50 text-green-700" : "border-red-200 bg-red-50 text-red-700"}`}>
       <div className="flex gap-2"><MapPin className="h-4 w-4" /> {distance == null ? "Location ready" : `You are ${Math.round(distance)}m from office - ${inRange ? "in range" : `outside the ${radius}m boundary`}`}</div>
-      {gps.accuracy && <p className="mt-2 text-xs">GPS accuracy: ±{Math.round(gps.accuracy)}m {gps.accuracy > 50 ? "- Low accuracy, move to open space" : ""}</p>}
+      {gps.accuracy && gps.accuracy > 100 && (
+        <p className="mt-2 text-xs font-semibold text-amber-700">⚠ Low GPS accuracy (±{Math.round(gps.accuracy)}m). Move to an open area for a better reading.</p>
+      )}
+      {gps.accuracy && gps.accuracy <= 100 && (
+        <p className="mt-2 text-xs">GPS accuracy: ±{Math.round(gps.accuracy)}m</p>
+      )}
     </div>
   );
 }
