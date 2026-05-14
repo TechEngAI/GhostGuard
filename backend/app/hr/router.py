@@ -7,7 +7,7 @@ from app.dependencies import get_current_admin, get_current_hr
 from app.errors import success_response
 from app.auth.schemas import RefreshRequest
 from app.hr import service
-from app.hr.schemas import HRCreateRequest, HRForgotPasswordRequest, HRLoginRequest, HRResetPasswordRequest
+from app.hr.schemas import HRCreateRequest, HRForgotPasswordRequest, HRLoginRequest, HRResetPasswordRequest, UpdateReceiptDecisionRequest
 
 router = APIRouter(tags=["hr"])
 
@@ -61,3 +61,23 @@ async def forgot_password(payload: HRForgotPasswordRequest):
 @router.post("/auth/hr/reset-password")
 async def reset_password(payload: HRResetPasswordRequest):
     return success_response(await service.reset_password(payload), "Password updated successfully.")
+
+
+@router.get("/hr/receipts")
+async def list_payment_receipts(page: int = 1, per_page: int = 20, hr: dict[str, Any] = Depends(get_current_hr)):
+    return success_response(await service.list_payment_receipts(hr, page, per_page), "Payment receipts retrieved.")
+
+
+@router.get("/hr/receipts/{receipt_id}")
+async def get_payment_receipt(receipt_id: UUID, hr: dict[str, Any] = Depends(get_current_hr)):
+    return success_response(await service.get_payment_receipt(hr, receipt_id), "Payment receipt retrieved.")
+
+
+@router.patch("/hr/receipts/{receipt_id}/decision")
+async def update_receipt_decision(receipt_id: UUID, payload: UpdateReceiptDecisionRequest, hr: dict[str, Any] = Depends(get_current_hr)):
+    return success_response(await service.update_receipt_decision(hr, receipt_id, payload.decision, payload.note), "Receipt decision updated.")
+
+
+@router.post("/hr/receipts/{receipt_id}/requery")
+async def requery_receipt_status(receipt_id: UUID, hr: dict[str, Any] = Depends(get_current_hr)):
+    return success_response(await service.requery_receipt_status(hr, receipt_id), "Receipt status requeried from Squad.")

@@ -4,11 +4,7 @@ from uuid import UUID
 
 from fastapi.encoders import jsonable_encoder
 
-from app.auth.schemas import RefreshRequest
-from app.auth.service import write_audit
-from app.database import get_supabase, get_supabase_admin_client, get_supabase_auth_client
-from app.errors import AppError
-from app.hr.schemas import HRCreateRequest, HRForgotPasswordRequest, HRLoginRequest, HRResetPasswordRequest
+from app.squad.client import requery_transfer
 
 
 def _public_hr(hr: dict[str, Any]) -> dict[str, Any]:
@@ -225,3 +221,81 @@ async def reset_password(payload: HRResetPasswordRequest) -> dict[str, Any]:
             raise
         raise AppError(400, "PASSWORD_RESET_FAILED", "Unable to reset password with the provided token.") from exc
     return {"updated": True}
+
+
+async def list_payment_receipts(hr: dict[str, Any], page: int = 1, per_page: int = 20) -> dict[str, Any]:
+    """List payment receipts for the HR's company."""
+    db = get_supabase()
+    offset = (page - 1) * per_page
+    result = (
+        db.table("payment_receipts")
+        .select(
+            "id, payroll_run_id, worker_id, squad_reference, squad_tx_id, squad_status, gross_salary, total_deductions, net_pay, amount_kobo, bank_account_number, bank_code, bank_name, account_name, trust_score, verdict, days_present, hr_decision, hr_note, paid_at, failure_reason, month_year, created_at"
+        )
+        .eq("company_id", hr["company_id"])
+        .order("created_at", desc=True)
+        .range(offset, offset + per_page - 1)
+        .execute()
+    )
+    receipts = result.data or []
+    # Get total count
+    count_result = db.table("payment_receipts").select("id", count="exact").eq("company_id", hr["company_id"]).execute()
+    total = count_result.count or 0
+    return {"receipts": receipts, "total": total, "page": page, "per_page": per_page}
+
+
+async def get_payment_receipt(hr: dict[str, Any], receipt_id: UUID) -> dict[str, Any]:
+    """Get a specific payment receipt."""
+    db = get_supabase()
+    result = db.table("payment_receipts").select("*").eq("id", str(receipt_id)).eq("company_id", hr["company_id"]).execute()
+    if not result.data:
+        raise AppError(404, "RECEIPT_NOT_FOUND", "Payment receipt not found.")
+    return result.data[0]
+
+
+async def update_receipt_decision(hr: dict[str, Any], receipt_id: UUID, decision: str, note: str | None = None) -> dict[str, Any]:
+    """Update HR decision on a payment receipt."""
+    if decision not in ["APPROVED", "REJECTED", "PENDING"]:
+        raise AppError(400, "INVALID_DECISION", "Decision must be APPROVED, REJECTED, or PENDING.")
+    db = get_supabase()
+    receipt = await get_payment_receipt(hr, receipt_id)
+    update_data = {"hr_decision": decision}
+    if note is not None:
+        update_data["hr_note"] = note
+    updated_result = db.table("payment_receipts").update(update_data).eq("id", str(receipt_id)).execute()
+    updated = _require_row(updated_result.data, "DATABASE_UPDATE_FAILED", "Could not update receipt decision.")
+    await write_audit(hr["id"], "hr", "RECEIPT_DECISION_UPDATED", str(receipt_id), "payment_receipt", {"decision": decision, "note": note})
+    return updated
+
+
+async def requery_receipt_status(hr: dict[str, Any], receipt_id: UUID) -> dict[str, Any]:
+    """Re-query the status of a payment receipt from Squad."""
+    db = get_supabase()
+    receipt = await get_payment_receipt(hr, receipt_id)
+    if not receipt.get("squad_reference"):
+        raise AppError(400, "NO_REFERENCE", "Receipt has no Squad reference to requery.")
+    try:
+        squad_data = await requery_transfer(receipt["squad_reference"])
+    except AppError as exc:
+        raise AppError(exc.status_code, exc.code, f"Requery failed: {exc.message}") from exc
+    # Map Squad status to our status
+    squad_status = squad_data.get("transaction_status", "").upper()
+    if squad_status == "SUCCESS":
+        our_status = "SUCCESS"
+    elif squad_status in ["FAILED", "REVERSED"]:
+        our_status = "FAILED"
+    else:
+        our_status = "PENDING"
+    # Update the receipt
+    update_data = {"squad_status": our_status}
+    if squad_data.get("nip_transaction_reference"):
+        update_data["squad_tx_id"] = squad_data["nip_transaction_reference"]
+    if our_status == "SUCCESS" and not receipt.get("paid_at"):
+        from datetime import UTC, datetime
+        update_data["paid_at"] = datetime.now(UTC).isoformat()
+    elif our_status == "FAILED":
+        update_data["failure_reason"] = squad_data.get("response_description") or "Failed via requery"
+    updated_result = db.table("payment_receipts").update(update_data).eq("id", str(receipt_id)).execute()
+    updated = _require_row(updated_result.data, "DATABASE_UPDATE_FAILED", "Could not update receipt status.")
+    await write_audit(hr["id"], "hr", "RECEIPT_STATUS_REQUERIED", str(receipt_id), "payment_receipt", {"squad_status": squad_status, "our_status": our_status})
+    return {"receipt": updated, "squad_data": squad_data}

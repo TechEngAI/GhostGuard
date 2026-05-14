@@ -20,3 +20,8 @@ class HRForgotPasswordRequest(BaseModel):
 class HRResetPasswordRequest(BaseModel):
     access_token: str
     new_password: str = Field(..., min_length=8)
+
+
+class UpdateReceiptDecisionRequest(BaseModel):
+    decision: str = Field(..., pattern=r"^(APPROVED|REJECTED|PENDING)$")
+    note: str | None = None
