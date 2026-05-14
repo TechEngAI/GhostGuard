@@ -74,7 +74,7 @@ export function BankSubmissionForm() {
       {step === 1 && (
         <div className="space-y-5">
           <h1 className="text-2xl font-bold">Add bank account</h1>
-          <Select label="Bank" options={NIGERIAN_BANKS.map((item) => ({ label: `${item.name} (${item.code})`, value: item.code }))} value={bankCode} onChange={(event) => setBankCode(event.target.value)} />
+          <Select label="Bank" options={NIGERIAN_BANKS.map((item) => ({ label: item.name, value: item.code }))} value={bankCode} onChange={(event) => setBankCode(event.target.value)} />
           <div>
             <Input label="Account number" inputMode="numeric" maxLength={10} value={accountNumber} onChange={(event) => setAccountNumber(event.target.value.replace(/\D/g, "").slice(0, 10))} />
             {loadingLookup && <p className="mt-2 flex items-center gap-2 text-sm text-ink-secondary"><Spinner /> Checking account...</p>}
