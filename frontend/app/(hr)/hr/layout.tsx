@@ -2,12 +2,13 @@
 
 import { ReactNode } from "react";
 import { SidebarHr } from "@/components/shared/SidebarHr";
+import { ErrorBoundaryWrapper } from "@/components/shared/ErrorBoundary";
 
 export default function HrLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-screen bg-background md:pl-60">
+    <div className="min-h-screen bg-background pb-20 md:pb-0 md:pl-60">
       <SidebarHr />
-      {children}
+      <ErrorBoundaryWrapper>{children}</ErrorBoundaryWrapper>
     </div>
   );
 }

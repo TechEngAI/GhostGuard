@@ -13,6 +13,7 @@ interface NavItem {
   href: string;
   icon: any;
   badge?: number;
+  dot?: boolean;
 }
 
 interface SidebarBaseProps {
@@ -65,7 +66,14 @@ export default function SidebarBase({
 
   if (!isLoaded) return <aside className="w-64 hidden md:block" />;
 
+  const navLinks = navItems.map((item) => {
+    const Icon = item.icon;
+    const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+    return { ...item, Icon, active };
+  });
+
   return (
+    <>
     <motion.aside
       initial={false}
       animate={{ width: isCollapsed ? 88 : 280 }}
@@ -136,9 +144,9 @@ export default function SidebarBase({
 
       {/* Nav */}
       <nav className="flex-1 px-4 space-y-1.5 overflow-y-auto custom-scrollbar">
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+        {navLinks.map((item) => {
+          const Icon = item.Icon;
+          const active = item.active;
           return (
             <Link
               key={item.href}
@@ -175,6 +183,9 @@ export default function SidebarBase({
                 )}>
                   {item.badge}
                 </span>
+              )}
+              {item.dot && (
+                <span className={cn("absolute h-2.5 w-2.5 rounded-full bg-green-500 ring-2 ring-white", isCollapsed ? "right-2 top-2" : "right-4 top-3")} />
               )}
               {isCollapsed && (
                 <div className="absolute left-full ml-4 hidden group-hover:block z-50">
@@ -213,5 +224,19 @@ export default function SidebarBase({
         </button>
       </div>
     </motion.aside>
+    <nav className="fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around border-t border-border bg-white px-2 py-2 shadow-2xl md:hidden">
+      {navLinks.slice(0, 5).map((item) => {
+        const Icon = item.Icon;
+        return (
+          <Link key={item.href} href={item.href} className={cn("relative flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl px-1 py-1.5 text-[10px] font-bold", item.active ? portalActiveColors[portal] : "text-ink-tertiary")}>
+            <Icon className="h-5 w-5" />
+            <span className="max-w-full truncate">{item.label}</span>
+            {item.badge !== undefined && item.badge > 0 && <span className="absolute right-3 top-1 h-4 min-w-4 rounded-full bg-red-500 px-1 text-[9px] leading-4 text-white">{item.badge}</span>}
+            {item.dot && <span className="absolute right-4 top-1 h-2.5 w-2.5 rounded-full bg-green-500 ring-2 ring-white" />}
+          </Link>
+        );
+      })}
+    </nav>
+    </>
   );
 }

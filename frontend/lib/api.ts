@@ -124,3 +124,36 @@ export const getHrPayrollRuns = () => api.get("/hr/payroll/runs");
 export const getHrPayrollResults = (runId: string, params?: unknown) => api.get(`/hr/payroll/${runId}/results`, { params });
 export const makeWorkerDecision = (runId: string, workerId: string, data: unknown) => api.patch(`/hr/payroll/${runId}/worker/${workerId}/decision`, data);
 export const approvePayroll = (runId: string) => api.post(`/hr/payroll/${runId}/approve`);
+
+// HR RECEIPTS
+export const getPayrollReceipts = (runId: string, params?: any) =>
+  api.get(`/hr/payroll/${runId}/receipts`, { params });
+
+export const downloadReceiptsCsv = (runId: string) =>
+  api.get(`/hr/payroll/${runId}/receipts/download`, { responseType: "blob" });
+
+export const retryFailedPayment = (runId: string, receiptId: string) =>
+  api.patch(`/hr/payroll/${runId}/receipt/${receiptId}/retry`);
+
+// WORKER PAYSLIP
+export const getWorkerPayslip = (params?: { month_year?: string }) =>
+  api.get("/worker/payslip", { params });
+
+export const getWorkerPayslips = () =>
+  api.get("/worker/payslips");
+
+// ADMIN ANALYTICS
+export const getAnalyticsSummary = () =>
+  api.get("/admin/analytics/summary");
+
+export const getPayrollHistory = () =>
+  api.get("/admin/analytics/payroll-history");
+
+export const getFraudBreakdown = () =>
+  api.get("/admin/analytics/fraud-breakdown");
+
+export const getTopRiskWorkers = (limit = 10) =>
+  api.get("/admin/analytics/top-risk-workers", { params: { limit } });
+
+export const getAttendanceOverview = (month_year?: string) =>
+  api.get("/admin/analytics/attendance-overview", { params: { month_year } });

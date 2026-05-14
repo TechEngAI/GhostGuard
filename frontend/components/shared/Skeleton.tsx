@@ -4,10 +4,27 @@ import { cn } from "@/lib/utils";
 
 interface SkeletonProps {
   className?: string;
+  lines?: number;
+  circle?: boolean;
 }
 
-export function Skeleton({ className }: SkeletonProps) {
-  return <div className={cn("skeleton rounded-md", className)} />;
+export function Skeleton({ className, lines = 1, circle = false }: SkeletonProps) {
+  if (lines > 1) {
+    return (
+      <div className={cn("space-y-3", className)}>
+        {Array.from({ length: lines }).map((_, index) => (
+          <div key={index} className="grid grid-cols-4 gap-3 rounded-lg border border-border bg-white p-4">
+            <div className="skeleton h-4 rounded-md" />
+            <div className="skeleton h-4 rounded-md" />
+            <div className="skeleton h-4 w-2/3 rounded-md" />
+            <div className="skeleton h-4 w-1/2 rounded-md" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return <div className={cn("skeleton rounded-md", circle && "rounded-full", className)} />;
 }
 
 Skeleton.Card = function SkeletonCard() {
@@ -42,6 +59,16 @@ Skeleton.Text = function SkeletonText({ lines = 1 }: { lines?: number }) {
       {Array.from({ length: lines }).map((_, i) => (
         <Skeleton key={i} className="h-4 w-full" />
       ))}
+    </div>
+  );
+};
+
+Skeleton.StatCard = function SkeletonStatCard() {
+  return (
+    <div className="rounded-2xl border border-border bg-white p-6 shadow-sm">
+      <Skeleton className="h-12 w-12 rounded-xl" />
+      <Skeleton className="mt-8 h-8 w-24" />
+      <Skeleton className="mt-3 h-3 w-32" />
     </div>
   );
 };

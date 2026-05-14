@@ -27,6 +27,15 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // If logged in but userType is invalid, clear cookies and redirect to login
+  if (!userType || !["admin", "worker", "hr"].includes(userType)) {
+    const response = NextResponse.redirect(new URL("/", request.url));
+    response.cookies.delete("access_token");
+    response.cookies.delete("refresh_token");
+    response.cookies.delete("user_type");
+    return response;
+  }
+
   // If logged in, prevent access to auth pages - redirect to their dashboard
   if (isAuthPage) {
     if (userType === "admin") return NextResponse.redirect(new URL("/admin/dashboard", request.url));
