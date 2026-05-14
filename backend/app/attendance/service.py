@@ -182,6 +182,14 @@ async def check_in(worker: dict[str, Any], payload: AttendanceCheckInRequest, ip
     if not is_remote:
         if company.get("office_lat") is None or company.get("office_lng") is None:
             raise AppError(400, "GPS_NOT_CONFIGURED", "Admin has not set office location yet.")
+        # Validate GPS accuracy if provided (reject if too poor: > 200m)
+        if payload.accuracy is not None and payload.accuracy > 200:
+            raise AppError(
+                400,
+                "GPS_ACCURACY_POOR",
+                f"GPS accuracy is too low (±{payload.accuracy:.0f}m). Move to an open area and try again.",
+                data={"accuracy_metres": round(payload.accuracy, 2), "accuracy_threshold": 200, "allowed": False},
+            )
         distance = haversine_metres(float(company["office_lat"]), float(company["office_lng"]), payload.latitude, payload.longitude)
         geofence_radius = float(company.get("geofence_radius") or 100)
         if distance > geofence_radius:
@@ -210,6 +218,7 @@ async def check_in(worker: dict[str, Any], payload: AttendanceCheckInRequest, ip
                 "check_in_time": now.isoformat(),
                 "check_in_lat": payload.latitude,
                 "check_in_lng": payload.longitude,
+                "check_in_accuracy": round(payload.accuracy, 2) if payload.accuracy is not None else None,
                 "distance_from_office": round(distance, 2) if distance is not None else None,
                 "device_id": payload.device_id,
                 "ip_address": ip_address,
@@ -245,7 +254,14 @@ async def check_out(worker: dict[str, Any], payload: AttendanceCheckOutRequest) 
     updated_result = (
         get_supabase()
         .table("attendance_records")
-        .update({"check_out_time": now.isoformat(), "check_out_lat": payload.latitude, "check_out_lng": payload.longitude, "hours_worked": hours, "status": "CLOSED"})
+        .update({
+            "check_out_time": now.isoformat(),
+            "check_out_lat": payload.latitude,
+            "check_out_lng": payload.longitude,
+            "check_out_accuracy": round(payload.accuracy, 2) if payload.accuracy is not None else None,
+            "hours_worked": hours,
+            "status": "CLOSED"
+        })
         .eq("id", record["id"])
         .execute()
     )
