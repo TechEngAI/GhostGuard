@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS attendance_records (
   distance_from_office DECIMAL(10,2),
   hours_worked DECIMAL(5,2),
   is_late BOOLEAN DEFAULT FALSE,
+  boundary_hugging BOOLEAN DEFAULT FALSE,
   is_manual_edit BOOLEAN DEFAULT FALSE,
   edited_by UUID REFERENCES admins(id),
   edited_at TIMESTAMPTZ,

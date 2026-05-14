@@ -30,6 +30,13 @@ def _today_bounds() -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
+def _working_days_in_month(month_year: str) -> int:
+    year, month = [int(part) for part in month_year.split("-")]
+    first_day = date(year, month, 1)
+    next_month = date(year + (1 if month == 12 else 0), 1 if month == 12 else month + 1, 1)
+    return sum(1 for offset in range((next_month - first_day).days) if (first_day + timedelta(days=offset)).weekday() < 5)
+
+
 def _month_year(now: datetime) -> str:
     return now.strftime("%Y-%m")
 
@@ -103,13 +110,15 @@ async def _detect_impossible_travel(worker: dict[str, Any], latitude: float, lon
         return None
     distance = haversine_metres(float(previous["check_in_lat"]), float(previous["check_in_lng"]), latitude, longitude)
     gap_seconds = (datetime.now(UTC) - _parse_dt(previous["check_in_time"])).total_seconds()
-    speed_kmh = float("inf") if gap_seconds <= 0 else (distance / 1000) / (gap_seconds / 3600)
+    if gap_seconds <= 0:
+        return None
+    speed_kmh = (distance / 1000) / (gap_seconds / 3600)
     if speed_kmh <= 200:
         return None
     metadata = {
         "distance_km": round(distance / 1000, 2),
         "time_gap_minutes": round(max(gap_seconds, 0) / 60, 2),
-        "speed_kmh": round(speed_kmh, 2) if speed_kmh != float("inf") else "inf",
+        "speed_kmh": round(speed_kmh, 2),
         "from_lat": previous["check_in_lat"],
         "from_lng": previous["check_in_lng"],
         "to_lat": latitude,
@@ -132,7 +141,6 @@ async def _detect_device_sharing(worker: dict[str, Any], device_id: str | None) 
     if not other_worker_ids:
         return None
     shared_count = len(other_worker_ids) + 1
-    severity = "CRITICAL" if shared_count >= 3 else "HIGH"
     all_workers = [worker["id"], *other_worker_ids]
     for flagged_worker_id in all_workers:
         db.table("fraud_signals").insert(
@@ -140,7 +148,7 @@ async def _detect_device_sharing(worker: dict[str, Any], device_id: str | None) 
                 "worker_id": flagged_worker_id,
                 "company_id": worker["company_id"],
                 "signal_type": "DEVICE_SHARED",
-                "severity": severity,
+                "severity": "CRITICAL",
                 "metadata": {"device_id": device_id, "shared_with_worker_ids": [wid for wid in all_workers if wid != flagged_worker_id], "shared_count": shared_count},
             }
         ).execute()
@@ -168,15 +176,22 @@ async def check_in(worker: dict[str, Any], payload: AttendanceCheckInRequest, ip
     now = datetime.now(UTC)
     role = await _get_role(worker["role_id"])
     company = await _get_company(worker["company_id"])
-    is_remote = role.get("work_type") == "REMOTE"
+    is_remote = str(role.get("work_type") or "").upper() == "REMOTE"
     distance = None
+    boundary_hugging = False
     if not is_remote:
         if company.get("office_lat") is None or company.get("office_lng") is None:
-            raise AppError(400, "GPS_NOT_CONFIGURED", "Your company administrator has not set up the office location yet. Contact your admin.")
+            raise AppError(400, "GPS_NOT_CONFIGURED", "Admin has not set office location yet.")
         distance = haversine_metres(float(company["office_lat"]), float(company["office_lng"]), payload.latitude, payload.longitude)
         geofence_radius = float(company.get("geofence_radius") or 100)
         if distance > geofence_radius:
-            raise AppError(403, "OUTSIDE_GEOFENCE", f"You are {distance:.0f}m from the office. You must be within {geofence_radius:.0f}m.")
+            raise AppError(
+                403,
+                "OUTSIDE_GEOFENCE",
+                f"You are {distance:.0f}m from the office. You must be within {geofence_radius:.0f}m.",
+                data={"distance_metres": round(distance, 2), "geofence_radius": geofence_radius, "allowed": False},
+            )
+        boundary_hugging = geofence_radius - 5 <= distance <= geofence_radius
 
     detected = []
     impossible = await _detect_impossible_travel(worker, payload.latitude, payload.longitude)
@@ -199,7 +214,8 @@ async def check_in(worker: dict[str, Any], payload: AttendanceCheckInRequest, ip
                 "device_id": payload.device_id,
                 "ip_address": ip_address,
                 "user_agent": user_agent,
-                "is_late": False if is_remote else _is_late(company, now),
+                "is_late": _is_late(company, now),
+                "boundary_hugging": boundary_hugging,
                 "status": "OPEN",
                 "month_year": _month_year(now),
             }
@@ -273,7 +289,8 @@ async def admin_worker_attendance(admin: dict[str, Any], worker_id: UUID, month:
     total_hours = round(sum(float(row.get("hours_worked") or 0) for row in rows), 2)
     start = (page - 1) * page_size
     days_present = len({row["check_in_time"][:10] for row in rows})
-    return {"records": rows[start : start + page_size], "summary": {"days_present": days_present, "days_absent": max(0, 22 - days_present), "total_hours": total_hours}, "pagination": {"page": page, "page_size": page_size, "total": len(rows)}}
+    working_days = _working_days_in_month(month)
+    return {"records": rows[start : start + page_size], "summary": {"days_present": days_present, "days_absent": max(0, working_days - days_present), "total_hours": total_hours}, "pagination": {"page": page, "page_size": page_size, "total": len(rows)}}
 
 
 async def edit_record(admin: dict[str, Any], record_id: UUID, payload: AttendanceEditRequest) -> dict[str, Any]:
@@ -291,7 +308,7 @@ async def edit_record(admin: dict[str, Any], record_id: UUID, payload: Attendanc
         update_data["hours_worked"] = round((_parse_dt(before["check_out_time"]) - payload.check_in_time).total_seconds() / 3600, 2)
     elif payload.check_out_time and before.get("check_in_time"):
         update_data["hours_worked"] = round((payload.check_out_time - _parse_dt(before["check_in_time"])).total_seconds() / 3600, 2)
-    update_data.update({"is_manual_edit": True, "edited_by": admin["id"], "edited_at": datetime.now(UTC).isoformat(), "edit_reason": payload.reason, "status": "MANUAL"})
+    update_data.update({"is_manual_edit": True, "edited_by": admin["id"], "edited_at": datetime.now(UTC).isoformat(), "edit_reason": payload.reason})
     updated_result = db.table("attendance_records").update(jsonable_encoder(update_data)).eq("id", str(record_id)).execute()
     updated = _require_row(updated_result.data, "DATABASE_UPDATE_FAILED", "Could not update attendance record. Please try again.")
     await write_audit(

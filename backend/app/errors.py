@@ -11,20 +11,22 @@ def success_response(data: Any = None, message: str = "Success.") -> dict[str, A
     return {"success": True, "data": data if data is not None else {}, "message": message}
 
 
-def error_response(code: str, message: str, field: str | None = None) -> dict[str, Any]:
+def error_response(code: str, message: str, field: str | None = None, data: Any = None) -> dict[str, Any]:
     """Build an error API envelope."""
 
     error: dict[str, Any] = {"code": code, "message": message}
     if field:
         error["field"] = field
+    if data is not None:
+        error["data"] = data
     return {"success": False, "error": error}
 
 
 class AppError(HTTPException):
     """HTTP exception with GhostGuard's consistent JSON error format."""
 
-    def __init__(self, status_code: int, code: str, message: str, field: str | None = None):
-        super().__init__(status_code=status_code, detail=error_response(code, message, field))
+    def __init__(self, status_code: int, code: str, message: str, field: str | None = None, data: Any = None):
+        super().__init__(status_code=status_code, detail=error_response(code, message, field, data))
 
 
 async def app_error_handler(_: Request, exc: AppError) -> JSONResponse:
