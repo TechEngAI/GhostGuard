@@ -44,7 +44,8 @@ def _require_row(data: Any, code: str, message: str) -> dict[str, Any]:
 def _email_in_use(email: str) -> bool:
     db = get_supabase()
     for table in ("admins", "workers", "hr_officers"):
-        if db.table(table).select("id").eq("email", email).maybe_single().execute().data:
+        result = db.table(table).select("id").eq("email", email).maybe_single().execute()
+        if getattr(result, "data", None):
             return True
     return False
 
@@ -95,20 +96,21 @@ async def create_hr_officer(admin: dict[str, Any], payload: HRCreateRequest) -> 
 
 
 async def list_hr_officers(admin: dict[str, Any]) -> dict[str, Any]:
-    rows = (
+    result = (
         get_supabase()
         .table("hr_officers")
         .select("id, first_name, last_name, email, status, last_login, created_at")
         .eq("company_id", admin["company_id"])
         .order("created_at", desc=True)
         .execute()
-        .data
     )
+    rows = getattr(result, "data", None) or []
     return {"hr_officers": rows}
 
 
 async def get_company_hr(admin: dict[str, Any], hr_id: UUID) -> dict[str, Any]:
-    rows = get_supabase().table("hr_officers").select("*").eq("id", str(hr_id)).eq("company_id", admin["company_id"]).limit(1).execute().data
+    result = get_supabase().table("hr_officers").select("*").eq("id", str(hr_id)).eq("company_id", admin["company_id"]).limit(1).execute()
+    rows = getattr(result, "data", None) or []
     if not rows:
         raise AppError(404, "HR_NOT_FOUND", "HR officer does not exist for this company.")
     return rows[0]
