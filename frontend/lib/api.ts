@@ -102,6 +102,13 @@ export const reactivateWorker = (id: string) => api.patch(`/admin/workers/${id}/
 export const reassignWorker = (id: string, data: unknown) => api.patch(`/admin/workers/${id}/reassign`, data);
 export const deleteWorker = (id: string) => api.delete(`/admin/workers/${id}`);
 
+// HR OFFICERS (admin view)
+export const getHrOfficers = () => api.get("/admin/hr");
+export const createHrOfficer = (data: unknown) => api.post("/admin/hr/create", data);
+export const suspendHrOfficer = (id: string) => api.patch(`/admin/hr/${id}/suspend`);
+export const reactivateHrOfficer = (id: string) => api.patch(`/admin/hr/${id}/reactivate`);
+export const deleteHrOfficer = (id: string) => api.delete(`/admin/hr/${id}`);
+
 // FRAUD SIGNALS
 export const getFraudSignals = (params?: unknown) => api.get("/admin/fraud-signals", { params });
 
