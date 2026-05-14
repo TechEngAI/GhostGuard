@@ -4,6 +4,16 @@ from uuid import UUID
 
 from fastapi.encoders import jsonable_encoder
 
+from app.auth.schemas import RefreshRequest
+from app.auth.service import write_audit
+from app.database import get_supabase, get_supabase_admin_client, get_supabase_auth_client
+from app.errors import AppError
+from app.hr.schemas import (
+    HRCreateRequest,
+    HRForgotPasswordRequest,
+    HRLoginRequest,
+    HRResetPasswordRequest,
+)
 from app.squad.client import requery_transfer
 
 
