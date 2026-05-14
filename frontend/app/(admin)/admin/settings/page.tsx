@@ -2,12 +2,36 @@
 
 import { useEffect, useState } from "react";
 import PageWrapper from "@/components/shared/PageWrapper";
+import { CompanySetupForm } from "@/components/onboarding/CompanySetupForm";
 import { Button } from "@/components/ui/Button";
 import { AUTH_HERO_IMAGE_KEY } from "@/lib/utils";
 import toast from "react-hot-toast";
-import { Image as ImageIcon, RotateCcw, Save } from "lucide-react";
+import { Building2, Image as ImageIcon, MapPin, RotateCcw, Save } from "lucide-react";
+
+type SettingsSection = "company" | "branding";
+
+const sections: Array<{
+  id: SettingsSection;
+  label: string;
+  description: string;
+  icon: typeof Building2;
+}> = [
+  {
+    id: "company",
+    label: "Company setup",
+    description: "Work days, office boundary, payroll cycle",
+    icon: MapPin,
+  },
+  {
+    id: "branding",
+    label: "Portal branding",
+    description: "Login and register page image",
+    icon: ImageIcon,
+  },
+];
 
 export default function AdminSettingsPage() {
+  const [activeSection, setActiveSection] = useState<SettingsSection>("company");
   const [imageUrl, setImageUrl] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
 
@@ -35,18 +59,50 @@ export default function AdminSettingsPage() {
   };
 
   return (
-    <PageWrapper className="p-8 max-w-4xl mx-auto">
-      <div className="mb-10">
-        <h1 className="text-4xl font-black tracking-tight text-ink">Settings</h1>
-        <p className="text-sm font-medium text-ink-secondary mt-1">
-          Configure platform branding and system preferences.
-        </p>
-      </div>
+    <PageWrapper
+      className="p-8"
+      title="Settings"
+      subtitle="Edit your company setup, office location, work schedule, and portal branding."
+    >
+      <div className="grid gap-6 xl:grid-cols-[280px_1fr]">
+        <aside className="h-fit rounded-lg border border-border bg-white p-3 shadow-sm">
+          <nav className="space-y-1">
+            {sections.map((section) => {
+              const Icon = section.icon;
+              const active = activeSection === section.id;
+              return (
+                <button
+                  key={section.id}
+                  type="button"
+                  onClick={() => setActiveSection(section.id)}
+                  className={`flex w-full items-start gap-3 rounded-lg px-3 py-3 text-left transition-colors ${
+                    active ? "bg-brand text-white" : "text-ink hover:bg-gray-50"
+                  }`}
+                >
+                  <Icon className={`mt-0.5 h-5 w-5 shrink-0 ${active ? "text-white" : "text-brand"}`} />
+                  <span>
+                    <span className="block text-sm font-black">{section.label}</span>
+                    <span className={`mt-0.5 block text-xs font-medium ${active ? "text-white/80" : "text-ink-secondary"}`}>
+                      {section.description}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
 
-      <div className="grid gap-8">
-        <section className="bg-white rounded-[32px] border border-border p-8 shadow-sm">
+        <div className="min-w-0">
+          {activeSection === "company" && (
+            <section>
+              <CompanySetupForm mode="settings" />
+            </section>
+          )}
+
+          {activeSection === "branding" && (
+        <section className="rounded-lg border border-border bg-white p-8 shadow-sm">
           <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 rounded-xl bg-brand-light flex items-center justify-center text-brand">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-light text-brand">
               <ImageIcon size={20} />
             </div>
             <h2 className="text-xl font-black text-ink">Portal Branding</h2>
@@ -79,7 +135,7 @@ export default function AdminSettingsPage() {
                 <label className="text-[10px] font-black uppercase tracking-widest text-ink-tertiary mb-4 block">
                   Preview
                 </label>
-                <div className="relative aspect-video w-full max-w-md rounded-2xl border-4 border-gray-100 overflow-hidden shadow-inner bg-gray-50">
+                <div className="relative aspect-video w-full max-w-md overflow-hidden rounded-lg border-4 border-gray-100 bg-gray-50 shadow-inner">
                   <img 
                     src={previewUrl} 
                     alt="Branding Preview" 
@@ -97,6 +153,8 @@ export default function AdminSettingsPage() {
             )}
           </div>
         </section>
+          )}
+        </div>
       </div>
     </PageWrapper>
   );
