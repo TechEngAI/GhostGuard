@@ -1,4 +1,4 @@
-﻿export const NIGERIAN_BANKS = [
+export const NIGERIAN_BANKS = [
   { name: "Access Bank", code: "000014" },
   { name: "Access (Diamond)", code: "000005" },
   { name: "Ecobank", code: "000010" },

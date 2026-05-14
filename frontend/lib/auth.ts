@@ -48,6 +48,11 @@ export function setTokens(accessToken: string, refreshToken: string, userType: U
   // Store in cookies (30-minute expiration)
   Cookies.set("access_token", accessToken, cookieOptions);
   Cookies.set("refresh_token", refreshToken, cookieOptions);
+
+
+  // We no longer store tokens in client-side cookies. 
+  // They are set as httpOnly cookies by the /api/auth routes.
+
   Cookies.set("user_type", userType, cookieOptions);
 
   // Also store in sessionStorage (cleared when tab closes)
@@ -57,6 +62,7 @@ export function setTokens(accessToken: string, refreshToken: string, userType: U
 }
 
 export function clearTokens() {
+
   // Clear cookies
   Cookies.remove("access_token");
   Cookies.remove("refresh_token");
@@ -84,6 +90,10 @@ export function getRefreshToken() {
 
   // Fallback to cookies
   return Cookies.get("refresh_token");
+  Cookies.remove("user_type");
+  // The /api/auth/logout route will clear the httpOnly cookies.
+  fetch("/api/auth/logout", { method: "DELETE" });
+
 }
 
 export function getUserType(): UserType | null {

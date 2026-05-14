@@ -42,3 +42,5 @@ export const verdictColor = (verdict: string) =>
   })[verdict] ?? "text-gray-600 bg-gray-100 border-gray-200";
 
 export const unwrapData = <T = any>(response: any): T => response?.data?.data ?? response?.data ?? response;
+
+export const AUTH_HERO_IMAGE_KEY = "gg_auth_hero_image";

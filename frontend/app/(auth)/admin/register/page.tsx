@@ -1,14 +1,20 @@
-import Link from "next/link";
 import { AdminRegisterForm } from "@/components/auth/AdminRegisterForm";
+import AuthLayout from "@/components/auth/AuthLayout";
 
 export default function AdminRegisterPage() {
   return (
-    <main className="min-h-screen bg-background px-4 py-12">
-      <div className="mb-8 text-center">
-        <Link href="/" className="text-2xl font-bold text-brand-dark">GhostGuard</Link>
-        <h1 className="mt-6 text-3xl font-bold">Create your admin account</h1>
-      </div>
+    <AuthLayout
+      portal="admin"
+      title="Join GhostGuard and protect your payroll."
+      subtitle="Admin Registration"
+      heroImageUrl="https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=600&q=80"
+      features={[
+        "Quick and easy company onboarding",
+        "Secure multi-factor authentication",
+        "Instant access to fraud detection tools"
+      ]}
+    >
       <AdminRegisterForm />
-    </main>
+    </AuthLayout>
   );
 }

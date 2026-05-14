@@ -1,22 +1,14 @@
 "use client";
 
 import axios, { AxiosError, InternalAxiosRequestConfig } from "axios";
-import { clearTokens, getAccessToken, getRefreshToken, getUserType, setTokens } from "@/lib/auth";
+import { clearTokens, getUserType, setTokens } from "@/lib/auth";
 import type { UserType } from "@/types";
 
 type RetryConfig = InternalAxiosRequestConfig & { _retry?: boolean };
 
 export const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL,
+  baseURL: "/api/proxy",
   headers: { "Content-Type": "application/json" },
-});
-
-api.interceptors.request.use((config) => {
-  const token = getAccessToken();
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
 });
 
 const loginPath = (type: UserType | null) => `/${type || "admin"}/login`;
@@ -26,14 +18,11 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const original = error.config as RetryConfig | undefined;
     const userType = getUserType();
-    const refreshToken = getRefreshToken();
-    if (error.response?.status === 401 && original && !original._retry && userType && refreshToken) {
+    
+    if (error.response?.status === 401 && original && !original._retry && userType) {
       original._retry = true;
       try {
-        const refresh = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/auth/${userType}/refresh`, { refresh_token: refreshToken });
-        const payload = refresh.data?.data || refresh.data;
-        setTokens(payload.access_token, payload.refresh_token, userType);
-        original.headers.Authorization = `Bearer ${payload.access_token}`;
+        await axios.post(`/api/auth/${userType}/refresh`);
         return api(original);
       } catch {
         clearTokens();
@@ -51,23 +40,28 @@ export const unwrapError = (error: unknown) => {
   return "Something went wrong.";
 };
 
-export const adminRegister = (data: unknown) => api.post("/auth/admin/register", data);
-export const adminVerifyOtp = (data: unknown) => api.post("/auth/admin/verify-otp", data);
-export const adminResendOtp = (data: unknown) => api.post("/auth/admin/resend-otp", data);
-export const adminLogin = (data: unknown) => api.post("/auth/admin/login", data);
-export const adminForgotPassword = (data: unknown) => api.post("/auth/admin/forgot-password", data);
-export const adminResetPassword = (data: unknown) => api.post("/auth/admin/reset-password", data);
+export const authApi = axios.create({
+  baseURL: "/api/auth",
+  headers: { "Content-Type": "application/json" },
+});
 
-export const workerRegister = (data: unknown) => api.post("/auth/worker/register", data);
-export const workerVerifyOtp = (data: unknown) => api.post("/auth/worker/verify-otp", data);
-export const workerResendOtp = (data: unknown) => api.post("/auth/worker/resend-otp", data);
-export const workerLogin = (data: unknown) => api.post("/auth/worker/login", data);
-export const workerForgotPassword = (data: unknown) => api.post("/auth/worker/forgot-password", data);
-export const workerResetPassword = (data: unknown) => api.post("/auth/worker/reset-password", data);
+export const adminRegister = (data: unknown) => authApi.post("/admin/register", data);
+export const adminVerifyOtp = (data: unknown) => authApi.post("/admin/verify-otp", data);
+export const adminResendOtp = (data: unknown) => authApi.post("/admin/resend-otp", data);
+export const adminLogin = (data: unknown) => authApi.post("/admin/login", data);
+export const adminForgotPassword = (data: unknown) => authApi.post("/admin/forgot-password", data);
+export const adminResetPassword = (data: unknown) => authApi.post("/admin/reset-password", data);
 
-export const hrLogin = (data: unknown) => api.post("/auth/hr/login", data);
-export const hrForgotPassword = (data: unknown) => api.post("/auth/hr/forgot-password", data);
-export const hrResetPassword = (data: unknown) => api.post("/auth/hr/reset-password", data);
+export const workerRegister = (data: unknown) => authApi.post("/worker/register", data);
+export const workerVerifyOtp = (data: unknown) => authApi.post("/worker/verify-otp", data);
+export const workerResendOtp = (data: unknown) => authApi.post("/worker/resend-otp", data);
+export const workerLogin = (data: unknown) => authApi.post("/worker/login", data);
+export const workerForgotPassword = (data: unknown) => authApi.post("/worker/forgot-password", data);
+export const workerResetPassword = (data: unknown) => authApi.post("/worker/reset-password", data);
+
+export const hrLogin = (data: unknown) => authApi.post("/hr/login", data);
+export const hrForgotPassword = (data: unknown) => authApi.post("/hr/forgot-password", data);
+export const hrResetPassword = (data: unknown) => authApi.post("/hr/reset-password", data);
 
 export const getCompany = () => api.get("/admin/company");
 export const updateCompany = (data: unknown) => api.put("/admin/company", data);

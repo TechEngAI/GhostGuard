@@ -20,14 +20,17 @@ function distanceMetres(aLat?: number | null, aLng?: number | null, bLat?: numbe
   return r * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+import PageWrapper from "@/components/shared/PageWrapper";
+
 export default function WorkerDashboardPage() {
   const [today, setToday] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const { gps, getLocation } = useGps();
   const deviceId = useDeviceFingerprint();
+
   useEffect(() => {
-    getLocation();
+    getLocation().catch(() => {}); // Initial location fetch
     async function load() {
       try {
         const [todayRes, profileRes] = await Promise.all([getTodayAttendance(), getWorkerProfile()]);
@@ -39,55 +42,93 @@ export default function WorkerDashboardPage() {
     }
     load();
   }, [getLocation]);
+
   const company = profile?.companies || profile?.company || {};
   const isRemote = profile?.roles?.work_type === "REMOTE";
   const distance = useMemo(() => distanceMetres(gps.latitude, gps.longitude, Number(company.office_lat), Number(company.office_lng)), [gps.latitude, gps.longitude, company.office_lat, company.office_lng]);
   const status = today?.status || "NOT_CHECKED_IN";
   const inRange = isRemote || distance == null || distance <= Number(company.geofence_radius || 100);
+
   async function doCheckIn() {
-    getLocation();
-    if (gps.latitude == null || gps.longitude == null) return toast.error("Location is not ready yet.");
     setLoading(true);
     try {
-      const response = await checkIn({ latitude: gps.latitude, longitude: gps.longitude, device_id: deviceId, user_agent: navigator.userAgent });
+      const coords = await getLocation();
+      const response = await checkIn({ 
+        latitude: coords.latitude, 
+        longitude: coords.longitude, 
+        device_id: deviceId, 
+        user_agent: navigator.userAgent 
+      });
       toast.success("Checked in! Have a great day.");
       if ((unwrapData<any>(response).fraud_signals_detected || []).length) toast("Note: anomaly recorded. Contact admin.");
       const next = await getTodayAttendance();
       setToday(unwrapData<any>(next));
     } catch (error) {
-      toast.error(unwrapError(error));
+      toast.error(error instanceof Error ? error.message : unwrapError(error));
     } finally {
       setLoading(false);
     }
   }
+
   async function doCheckOut() {
-    getLocation();
-    if (gps.latitude == null || gps.longitude == null) return toast.error("Location is not ready yet.");
     setLoading(true);
     try {
-      const response = await checkOut({ latitude: gps.latitude, longitude: gps.longitude });
+      const coords = await getLocation();
+      const response = await checkOut({ 
+        latitude: coords.latitude, 
+        longitude: coords.longitude 
+      });
       toast.success(`Checked out. You worked ${unwrapData<any>(response).hours_worked || 0}h today.`);
       const next = await getTodayAttendance();
       setToday(unwrapData<any>(next));
     } catch (error) {
-      toast.error(unwrapError(error));
+      toast.error(error instanceof Error ? error.message : unwrapError(error));
     } finally {
       setLoading(false);
     }
   }
+
   return (
-    <main className="p-6">
-      <div className="mx-auto max-w-lg space-y-4">
+    <PageWrapper className="p-8 max-w-2xl mx-auto">
+      <div className="mb-10 text-center">
+        <h1 className="text-4xl font-black tracking-tight text-ink">Worker Dashboard</h1>
+        <p className="text-sm font-medium text-ink-secondary mt-1">
+          {profile ? `Welcome back, ${profile.first_name}` : "Check in to start your workday"}
+        </p>
+      </div>
+
+      <div className="space-y-6">
         <CheckInCard today={today} />
-        {status === "NOT_CHECKED_IN" && <GpsStatusIndicator gps={gps} isRemote={isRemote} distance={distance} radius={Number(company.geofence_radius || 100)} onRetry={getLocation} />}
+        
+        {status === "NOT_CHECKED_IN" && (
+          <GpsStatusIndicator 
+            gps={gps} 
+            isRemote={isRemote} 
+            distance={distance} 
+            radius={Number(company.geofence_radius || 100)} 
+            onRetry={getLocation} 
+          />
+        )}
+
         <button
           disabled={loading || status === "CHECKED_OUT" || (status === "NOT_CHECKED_IN" && (!inRange || gps.status === "loading"))}
           onClick={status === "CHECKED_IN" ? doCheckOut : doCheckIn}
-          className={`w-full rounded-lg px-5 py-4 text-lg font-bold text-white disabled:cursor-not-allowed disabled:bg-gray-300 ${status === "CHECKED_IN" ? "bg-amber-600" : !inRange ? "bg-red-700" : "bg-brand"}`}
+          className={`relative w-full overflow-hidden rounded-[32px] px-8 py-6 text-xl font-black text-white shadow-2xl transition-all active:scale-95 disabled:scale-100 disabled:cursor-not-allowed disabled:bg-gray-300 ${
+            status === "CHECKED_IN" 
+              ? "bg-amber-600 shadow-amber-500/20" 
+              : !inRange 
+                ? "bg-red-700 shadow-red-500/20" 
+                : "bg-brand shadow-brand/20"
+          }`}
         >
-          {loading ? "Working..." : status === "CHECKED_IN" ? "Check Out" : status === "CHECKED_OUT" ? "See you tomorrow" : gps.status === "loading" ? "Detecting location..." : !inRange ? "Outside Office Boundary" : "Check In Now"}
+          <span className="relative z-10">
+            {loading ? "Processing..." : status === "CHECKED_IN" ? "Check Out" : status === "CHECKED_OUT" ? "See you tomorrow" : gps.status === "loading" ? "Detecting location..." : !inRange ? "Outside Boundary" : "Check In Now"}
+          </span>
+          {status !== "CHECKED_OUT" && !loading && (
+             <div className="absolute inset-0 bg-white/10 opacity-0 hover:opacity-100 transition-opacity" />
+          )}
         </button>
       </div>
-    </main>
+    </PageWrapper>
   );
 }

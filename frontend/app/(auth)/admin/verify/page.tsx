@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { OtpInput } from "@/components/ui/OtpInput";
 import { adminVerifyOtp, unwrapError } from "@/lib/api";
 import { setTokens } from "@/lib/auth";
+import AuthLayout from "@/components/auth/AuthLayout";
 
 type VerifyData = {
   access_token?: string;
@@ -62,7 +63,41 @@ function AdminVerifyContent() {
       setOtp("");
     }
   }
-  return <main className="flex min-h-screen items-center justify-center bg-background px-4"><div className="rounded-xl border border-border bg-white p-8 text-center shadow-soft"><h1 className="mb-6 text-2xl font-bold">Verify admin account</h1>{isVerifyingLink ? <p className="text-sm text-ink-secondary">Verifying your email...</p> : <><OtpInput value={otp} onChange={setOtp} /><Button className="mt-6" disabled={otp.length !== 6} onClick={verify}>Verify</Button></>}</div></main>;
+
+  return (
+    <AuthLayout
+      portal="admin"
+      title="Protecting your company starts with you."
+      subtitle="Verify Account"
+      features={[
+        "Secure verification process",
+        "Account ownership confirmation",
+        "Instant access upon verification"
+      ]}
+    >
+      <div className="text-center">
+        <h2 className="text-xl font-bold mb-4">Enter verification code</h2>
+        <p className="text-sm text-ink-secondary mb-8">
+          We've sent a 6-digit code to your email. Enter it below to proceed.
+        </p>
+
+        {isVerifyingLink ? (
+          <p className="text-sm text-ink-secondary">Verifying your email...</p>
+        ) : (
+          <>
+            <OtpInput value={otp} onChange={setOtp} />
+            <Button 
+              className="mt-8 w-full h-12 rounded-xl font-bold shadow-soft transition-all hover:scale-[1.02] active:scale-[0.98]" 
+              disabled={otp.length !== 6} 
+              onClick={verify}
+            >
+              Verify & Continue
+            </Button>
+          </>
+        )}
+      </div>
+    </AuthLayout>
+  );
 }
 
 export default function AdminVerifyPage() {
