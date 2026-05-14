@@ -36,7 +36,11 @@ def _require_response(response: Any, code: str, message: str) -> Any:
     return response
 
 
-def _unique_invite_code(db: Any, company_name: str, role_name: str) -> str:
+def _response_data(response: Any) -> Any:
+    return getattr(response, "data", None) if response is not None else None
+
+
+def _unique_invite_code(db: Any, company_name: str, role_name: str, current_code: str | None = None) -> str:
     if not company_name or not role_name:
         raise AppError(400, "INVALID_INPUT", "Company name and role name are required.")
     
@@ -49,7 +53,7 @@ def _unique_invite_code(db: Any, company_name: str, role_name: str) -> str:
                 "DATABASE_QUERY_FAILED",
                 "Could not verify invite code uniqueness."
             )
-            if existing.data is None:
+            if _response_data(existing) is None and code != current_code:
                 return code
         except AppError:
             raise
@@ -106,24 +110,8 @@ async def create_role(data: CreateRoleSchema, current_admin: dict[str, Any]) -> 
     except Exception:
         company_name = "COMP"
 
-    invite_code = None
-    max_attempts = 10
-    for _ in range(max_attempts):
-        candidate = _generate_code(company_name, data.role_name)
-        try:
-            existing = db.table("roles").select("id").eq("invite_code", candidate).maybe_single().execute()
-            if not existing.data:
-                invite_code = candidate
-                break
-        except Exception:
-            invite_code = candidate
-            break
-
-    if not invite_code:
-        raise AppError(500, "CODE_GENERATION_FAILED", "Could not generate a unique invite code. Try again.")
-
     now_iso = datetime.now(timezone.utc).isoformat()
-    insert_payload = {
+    base_insert_payload = {
         "company_id": company_id,
         "role_name": data.role_name.strip(),
         "department": data.department,
@@ -135,22 +123,26 @@ async def create_role(data: CreateRoleSchema, current_admin: dict[str, Any]) -> 
         "health_deduct": float(data.health_deduct or 0),
         "other_deductions": float(data.other_deductions or 0),
         "work_type": data.work_type or "ONSITE",
-        "invite_code": invite_code,
         "code_active": True,
         "created_at": now_iso,
         "updated_at": now_iso,
     }
 
-    try:
-        result = db.table("roles").insert(insert_payload).execute()
-    except Exception as e:
-        error_str = str(e).lower()
-        if "unique" in error_str and "invite_code" in error_str:
-            raise AppError(409, "CODE_COLLISION", "Invite code conflict. Please try again.")
-        print(f"Role insert error: {e}")
-        raise AppError(500, "ROLE_CREATE_FAILED", "Failed to create role. Please try again.")
+    result = None
+    invite_code = ""
+    for attempt in range(3):
+        invite_code = _unique_invite_code(db, company_name, data.role_name)
+        try:
+            result = db.table("roles").insert({**base_insert_payload, "invite_code": invite_code}).execute()
+            break
+        except Exception as e:
+            error_str = str(e).lower()
+            if "unique" in error_str and "invite_code" in error_str and attempt < 2:
+                continue
+            print(f"Role insert error: {e}")
+            raise AppError(500, "ROLE_CREATE_FAILED", "Failed to create role. Please try again.")
 
-    if not result.data:
+    if not result or not result.data:
         raise AppError(500, "ROLE_CREATE_FAILED", "Role creation returned no data. Check Supabase RLS policies.")
 
     new_role = result.data[0]
@@ -287,30 +279,35 @@ async def regenerate_invite_code(role_id: str | UUID, current_admin: dict[str, A
     db = get_supabase()
     company_id = _admin_company_id(current_admin)
 
-    existing = db.table("roles").select("*").eq("id", str(role_id)).eq("company_id", company_id).maybe_single().execute()
+    existing = _require_response(
+        db.table("roles").select("*").eq("id", str(role_id)).eq("company_id", company_id).maybe_single().execute(),
+        "DATABASE_QUERY_FAILED",
+        "Could not fetch role. Please try again."
+    )
 
-    if not existing.data:
+    existing_role = _response_data(existing)
+    if not existing_role:
         raise AppError(404, "ROLE_NOT_FOUND", "Role not found.")
 
-    company_result = db.table("companies").select("name").eq("id", company_id).single().execute()
-    company_name = company_result.data["name"] if company_result.data else "COMP"
+    company_result = _require_response(
+        db.table("companies").select("name").eq("id", company_id).single().execute(),
+        "DATABASE_QUERY_FAILED",
+        "Could not fetch company. Please try again."
+    )
+    company = _response_data(company_result)
+    company_name = company["name"] if company else "COMP"
 
-    new_code = None
-    for _ in range(10):
-        candidate = _generate_code(company_name, existing.data["role_name"])
-        check = db.table("roles").select("id").eq("invite_code", candidate).maybe_single().execute()
-        if not check.data:
-            new_code = candidate
-            break
-
-    if not new_code:
-        raise AppError(500, "CODE_GENERATION_FAILED", "Try again.")
+    new_code = _unique_invite_code(db, company_name, existing_role["role_name"], existing_role["invite_code"])
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    db.table("roles").update({
+    result = _require_response(db.table("roles").update({
         "invite_code": new_code,
         "updated_at": now_iso,
-    }).eq("id", str(role_id)).execute()
+    }).eq("id", str(role_id)).eq("company_id", company_id).execute(),
+        "DATABASE_UPDATE_FAILED",
+        "Could not update invite code. Please try again."
+    )
+    updated_role = _require_row(_response_data(result), "DATABASE_UPDATE_FAILED", "Invite code update returned no data.")
 
     try:
         db.table("audit_logs").insert({
@@ -319,7 +316,7 @@ async def regenerate_invite_code(role_id: str | UUID, current_admin: dict[str, A
             "action": "REGENERATE_ROLE_CODE",
             "target_id": str(role_id),
             "target_type": "role",
-            "metadata": {"old_code": existing.data["invite_code"], "new_code": new_code},
+            "metadata": {"old_code": existing_role["invite_code"], "new_code": new_code},
             "created_at": now_iso,
         }).execute()
     except Exception as audit_err:
@@ -328,7 +325,7 @@ async def regenerate_invite_code(role_id: str | UUID, current_admin: dict[str, A
     return {
         "success": True,
         "message": "New invite code generated. Old code is now invalid.",
-        "data": {"invite_code": new_code},
+        "data": {"invite_code": updated_role["invite_code"]},
     }
 
 
