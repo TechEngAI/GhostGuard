@@ -176,28 +176,292 @@ async def approve_payroll(hr: dict[str, Any], run_id: UUID) -> dict[str, Any]:
     }
 
 
-async def disburse_payroll(run_id: str) -> dict[str, Any]:
-    db = get_supabase()
-    settings = get_settings()
-    runs = db.table("payroll_runs").select("*").eq("id", run_id).limit(1).execute().data
-    if not runs:
-        raise AppError(404, "PAYROLL_RUN_NOT_FOUND", "Payroll run was not found.")
-    run = runs[0]
-    results = db.table("ghost_analysis_results").select("*").eq("payroll_run_id", run_id).execute().data
-    workers = [row for row in results if row.get("hr_decision") == "INCLUDE" or ((row.get("hr_decision") or "PENDING") == "PENDING" and row.get("verdict") == "VERIFIED")]
-    db.table("payroll_runs").update({"status": "DISBURSING"}).eq("id", run_id).execute()
-    summary = {"paid": 0, "failed": 0, "total_amount_kobo": 0}
-    for result in workers:
-        attempt = await initiate_single_payment(result, run_id, settings.squad_secret_key)
-        if attempt.get("success"):
-            summary["paid"] += 1
-            summary["total_amount_kobo"] += int(attempt.get("amount_kobo") or 0)
+from app.squad.transfer import get_ledger_balance, transfer_to_worker, requery_transfer
+from datetime import datetime, timezone
+
+
+async def disburse_payroll(run_id: str, hr_officer: dict) -> dict:
+    """
+    Disburse payroll for a payroll run.
+    Called after HR approves. Checks wallet balance first.
+    Transfers to each verified worker via Squad Transfer API.
+    Updates company wallet and creates payment receipts.
+    """
+    now = datetime.now(timezone.utc)
+    company_id = hr_officer["company_id"]
+
+    # Load payroll run
+    run = get_supabase().table("payroll_runs").select("*").eq(
+        "id", run_id
+    ).single().execute().data
+    if not run:
+        raise AppError(404, "RUN_NOT_FOUND", "Payroll run not found.")
+
+    # Load workers to pay: VERIFIED verdict (any HR decision) + hr_decision=INCLUDE
+    results = get_supabase().table("ghost_analysis_results").select(
+        "*, workers(id, first_name, last_name, company_id, "
+        "worker_bank_accounts(account_number, bank_code, bank_name, account_name, is_active))"
+    ).eq("payroll_run_id", run_id).execute().data or []
+
+    workers_to_pay = [
+        r for r in results
+        if r["hr_decision"] == "INCLUDE"
+        or (r["verdict"] == "VERIFIED" and r["hr_decision"] == "PENDING")
+    ]
+
+    if not workers_to_pay:
+        raise AppError(400, "NO_WORKERS_TO_PAY", "No workers approved for payment in this payroll run.")
+
+    # Calculate total net pay needed
+    total_kobo_needed = 0
+    worker_pay_details = []
+
+    for result in workers_to_pay:
+        worker = result.get("workers", {})
+
+        # Get active bank account
+        bank_accounts = worker.get("worker_bank_accounts", [])
+        active_bank = next((b for b in bank_accounts if b["is_active"]), None)
+        if not active_bank:
+            print(f"Worker {worker['id']} has no active bank account — skipping")
+            continue
+
+        # Load salary details from role
+        role_data = get_supabase().table("roles").select(
+            "gross_salary, pension_deduct, health_deduct, other_deductions"
+        ).eq("id", get_supabase().table("workers").select("role_id").eq(
+            "id", worker["id"]
+        ).single().execute().data["role_id"]).single().execute().data
+
+        if not role_data:
+            continue
+
+        gross = float(role_data["gross_salary"])
+        deductions = (
+            float(role_data["pension_deduct"] or 0) +
+            float(role_data["health_deduct"] or 0) +
+            float(role_data["other_deductions"] or 0)
+        )
+        net_ngn = gross - deductions
+        net_kobo = int(net_ngn * 100)
+
+        if net_kobo <= 0:
+            print(f"Worker {worker['id']} net pay is zero — skipping")
+            continue
+
+        total_kobo_needed += net_kobo
+        worker_pay_details.append({
+            "result": result,
+            "worker": worker,
+            "bank": active_bank,
+            "gross_ngn": gross,
+            "deductions_ngn": deductions,
+            "net_ngn": net_ngn,
+            "net_kobo": net_kobo
+        })
+
+    # CHECK COMPANY WALLET BALANCE
+    wallet = get_supabase().table("company_wallet").select("*").eq(
+        "company_id", company_id
+    ).single().execute().data
+
+    if not wallet:
+        raise AppError(400, "WALLET_NOT_FOUND", "Company wallet not found. Contact support.")
+
+    if wallet["balance_kobo"] < total_kobo_needed:
+        shortfall_ngn = (total_kobo_needed - wallet["balance_kobo"]) / 100
+        available_ngn = wallet["balance_kobo"] / 100
+        needed_ngn = total_kobo_needed / 100
+        raise AppError(402, "INSUFFICIENT_WALLET_BALANCE", (
+            f"Insufficient funds. Payroll requires NGN {needed_ngn:,.2f} "
+            f"but wallet has NGN {available_ngn:,.2f}. "
+            f"Please deposit at least NGN {shortfall_ngn:,.2f} to proceed."
+        ))
+
+    # Update payroll run status
+    get_supabase().table("payroll_runs").update({
+        "status": "DISBURSING"
+    }).eq("id", run_id).execute()
+
+    # DISBURSE TO EACH WORKER
+    paid_count = 0
+    failed_count = 0
+    total_paid_kobo = 0
+
+    for detail in worker_pay_details:
+        worker = detail["worker"]
+        bank = detail["bank"]
+        net_kobo = detail["net_kobo"]
+        result = detail["result"]
+        month_year = run["month_year"]
+
+        remark = f"GhostGuard Salary {month_year} - {worker['first_name']} {worker['last_name']}"
+
+        # Create wallet_transaction record BEFORE Squad call
+        tx_insert = get_supabase().table("wallet_transactions").insert({
+            "company_id": company_id,
+            "type": "DISBURSEMENT",
+            "amount_kobo": net_kobo,
+            "status": "PENDING",
+            "description": remark,
+            "worker_id": worker["id"],
+            "payroll_run_id": run_id,
+            "created_at": now.isoformat()
+        }).execute()
+
+        tx_id = tx_insert.data[0]["id"] if tx_insert.data else None
+
+        # Create payment receipt BEFORE Squad call
+        receipt_insert = get_supabase().table("payment_receipts").insert({
+            "payroll_run_id": run_id,
+            "worker_id": worker["id"],
+            "company_id": company_id,
+            "gross_salary": detail["gross_ngn"],
+            "total_deductions": detail["deductions_ngn"],
+            "net_pay": detail["net_ngn"],
+            "amount_kobo": net_kobo,
+            "bank_account_number": bank["account_number"],
+            "bank_code": bank["bank_code"],
+            "bank_name": bank["bank_name"],
+            "account_name": bank["account_name"],
+            "trust_score": result.get("trust_score"),
+            "verdict": result.get("verdict"),
+            "days_present": result.get("days_present"),
+            "hr_decision": result.get("hr_decision"),
+            "squad_status": "PENDING",
+            "month_year": month_year,
+            "created_at": now.isoformat()
+        }).execute()
+
+        receipt_id = receipt_insert.data[0]["id"] if receipt_insert.data else None
+
+        # CALL SQUAD TRANSFER
+        if get_settings().use_squad_lookup:
+            transfer_result = await transfer_to_worker(
+                account_number=bank["account_number"],
+                bank_code=bank["bank_code"],
+                account_name=bank["account_name"],
+                amount_kobo=net_kobo,
+                company_id=company_id,
+                worker_id=worker["id"],
+                remark=remark
+            )
         else:
-            summary["failed"] += 1
-        await write_audit(None or result["worker_id"], "system", "SQUAD_PAYMENT_INITIATED", result["worker_id"], "worker", {"run_id": run_id, **attempt})
-    db.table("payroll_runs").update({"status": "DISBURSED"}).eq("id", run_id).execute()
-    await write_audit(run.get("generated_by") or "00000000-0000-0000-0000-000000000000", "system", "PAYROLL_DISBURSEMENT_COMPLETE", run_id, "payroll_run", {"run_id": run_id, "paid_count": summary["paid"], "failed_count": summary["failed"], "total_amount_kobo": summary["total_amount_kobo"]})
-    return summary
+            # Mock mode — simulate payment for demo
+            import asyncio, uuid
+            await asyncio.sleep(0.3)
+            transfer_result = {
+                "success": True,
+                "squad_reference": f"{get_settings().squad_merchant_id}_{worker['id'][:8].upper()}_{int(now.timestamp())}",
+                "squad_tx_id": f"SQPYT{uuid.uuid4().hex[:12].upper()}",
+                "nip_reference": f"NIP{uuid.uuid4().hex[:20].upper()}",
+                "amount_kobo": net_kobo
+            }
+
+        if transfer_result["success"]:
+            squad_ref = transfer_result["squad_reference"]
+            squad_tx = transfer_result["squad_tx_id"]
+            nip_ref = transfer_result.get("nip_reference")
+
+            # Update wallet_transaction
+            if tx_id:
+                get_supabase().table("wallet_transactions").update({
+                    "status": "SUCCESS",
+                    "squad_reference": squad_ref,
+                    "squad_tx_id": squad_tx,
+                    "squad_nip_ref": nip_ref,
+                    "squad_response": transfer_result.get("raw"),
+                    "updated_at": now.isoformat()
+                }).eq("id", tx_id).execute()
+
+            # Update payment receipt
+            if receipt_id:
+                get_supabase().table("payment_receipts").update({
+                    "squad_reference": squad_ref,
+                    "squad_tx_id": squad_tx,
+                    "squad_status": "PAID" if get_settings().use_squad_lookup else "PAID",
+                    "paid_at": now.isoformat()
+                }).eq("id", receipt_id).execute()
+
+            # Deduct from company wallet
+            get_supabase().table("company_wallet").update({
+                "balance_kobo": wallet["balance_kobo"] - net_kobo,
+                "total_disbursed_kobo": wallet.get("total_disbursed_kobo", 0) + net_kobo,
+                "last_disburse_at": now.isoformat(),
+                "updated_at": now.isoformat()
+            }).eq("company_id", company_id).execute()
+
+            # Update wallet reference for next iteration
+            wallet["balance_kobo"] -= net_kobo
+
+            paid_count += 1
+            total_paid_kobo += net_kobo
+
+        else:
+            # Handle requery case (424 timeout)
+            final_status = "FAILED"
+            if transfer_result.get("should_requery"):
+                import asyncio
+                await asyncio.sleep(2)
+                requery = await requery_transfer(transfer_result.get("squad_reference", ""))
+                if requery.get("status") == "success":
+                    final_status = "SUCCESS"
+                    paid_count += 1
+                    total_paid_kobo += net_kobo
+                    # Deduct from wallet
+                    get_supabase().table("company_wallet").update({
+                        "balance_kobo": wallet["balance_kobo"] - net_kobo,
+                        "total_disbursed_kobo": wallet.get("total_disbursed_kobo", 0) + net_kobo,
+                    }).eq("company_id", company_id).execute()
+                    wallet["balance_kobo"] -= net_kobo
+
+            if tx_id:
+                get_supabase().table("wallet_transactions").update({
+                    "status": final_status,
+                    "failure_reason": transfer_result.get("error"),
+                    "updated_at": now.isoformat()
+                }).eq("id", tx_id).execute()
+
+            if receipt_id:
+                get_supabase().table("payment_receipts").update({
+                    "squad_status": final_status,
+                    "failure_reason": transfer_result.get("error")
+                }).eq("id", receipt_id).execute()
+
+            if final_status == "FAILED":
+                failed_count += 1
+
+    # Update payroll run to DISBURSED
+    get_supabase().table("payroll_runs").update({
+        "status": "DISBURSED",
+        "approved_at": now.isoformat()
+    }).eq("id", run_id).execute()
+
+    # Audit log
+    get_supabase().table("audit_logs").insert({
+        "actor_id": hr_officer["id"],
+        "actor_type": "hr",
+        "action": "PAYROLL_DISBURSEMENT_COMPLETE",
+        "target_id": run_id,
+        "target_type": "payroll_run",
+        "metadata": {
+            "paid_count": paid_count,
+            "failed_count": failed_count,
+            "total_paid_ngn": total_paid_kobo / 100,
+            "month_year": run["month_year"]
+        }
+    }).execute()
+
+    return {
+        "success": True,
+        "message": f"Payroll disbursed. {paid_count} workers paid, {failed_count} failed.",
+        "data": {
+            "paid_count": paid_count,
+            "failed_count": failed_count,
+            "total_paid_ngn": total_paid_kobo / 100,
+            "run_id": run_id
+        }
+    }
 
 
 async def receipts(hr: dict[str, Any], run_id: UUID, squad_status: str | None, page: int, page_size: int) -> dict[str, Any]:

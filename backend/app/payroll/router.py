@@ -31,7 +31,7 @@ async def decision(run_id: UUID, worker_id: UUID, payload: PayrollDecisionReques
 @router.post("/hr/payroll/{run_id}/approve")
 async def approve(run_id: UUID, background_tasks: BackgroundTasks, hr: dict[str, Any] = Depends(get_current_hr)):
     data = await service.approve_payroll(hr, run_id)
-    background_tasks.add_task(service.disburse_payroll, str(run_id))
+    background_tasks.add_task(service.disburse_payroll, str(run_id), hr)
     return success_response(data, "Payroll approved. Salary disbursement has started.")
 
 
