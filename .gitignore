@@ -1,0 +1,74 @@
+# Environment files
+.env
+.env.*
+!.env.example
+!*.env.example
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# FastAPI/Uvicorn and local runtime files
+*.log
+logs/
+*.pid
+*.sqlite
+*.sqlite3
+
+# Build and packaging artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Generated datasets and model artifacts
+synthetic_payroll.csv
+*.pkl
+*.joblib
+*.onnx
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local secrets and credentials
+*.pem
+*.key
+*.crt
+secrets/
+
+# Node/frontend artifacts, for later parts
+node_modules/
+.next/
+dist/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Railway/local deployment caches
+.railway/
+.nixpacks/
