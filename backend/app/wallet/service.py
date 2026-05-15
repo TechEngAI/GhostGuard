@@ -6,6 +6,7 @@ from fastapi import HTTPException
 import hmac
 import hashlib
 from app.config import get_settings
+from typing import List, Optional
 
 
 async def get_wallet_overview(company_id: str) -> WalletOverview:
