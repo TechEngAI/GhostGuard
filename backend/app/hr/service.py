@@ -67,7 +67,7 @@ async def create_hr_officer(admin: dict[str, Any], payload: HRCreateRequest) -> 
             email,
             options={
                 "data": {"user_type": "hr", "company_id": admin["company_id"]},
-                "email_redirect_to": f"{settings.frontend_url}/hr/verify?email={email}",
+                "redirect_to": f"{settings.frontend_url}/auth/confirm",
             },
         )
     except TypeError:
