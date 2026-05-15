@@ -111,25 +111,6 @@ export default function WorkerDashboardPage() {
             onRetry={getLocation} 
           />
         )}
-
-        <button
-          disabled={loading || status === "CHECKED_OUT" || (status === "NOT_CHECKED_IN" && (!inRange || gps.status === "loading"))}
-          onClick={status === "CHECKED_IN" ? doCheckOut : doCheckIn}
-          className={`relative w-full overflow-hidden rounded-[32px] px-8 py-6 text-xl font-black text-white shadow-2xl transition-all active:scale-95 disabled:scale-100 disabled:cursor-not-allowed disabled:bg-gray-300 ${
-            status === "CHECKED_IN" 
-              ? "bg-amber-600 shadow-amber-500/20" 
-              : !inRange 
-                ? "bg-red-700 shadow-red-500/20" 
-                : "bg-brand shadow-brand/20"
-          }`}
-        >
-          <span className="relative z-10">
-            {loading ? "Processing..." : status === "CHECKED_IN" ? "Check Out" : status === "CHECKED_OUT" ? "See you tomorrow" : gps.status === "loading" ? "Detecting location..." : !inRange ? "Outside Boundary" : "Check In Now"}
-          </span>
-          {status !== "CHECKED_OUT" && !loading && (
-             <div className="absolute inset-0 bg-white/10 opacity-0 hover:opacity-100 transition-opacity" />
-          )}
-        </button>
       </div>
     </PageWrapper>
   );
