@@ -159,6 +159,14 @@ export const getPayrollHistory = () =>
 export const getFraudBreakdown = () =>
   api.get("/admin/analytics/fraud-breakdown");
 
+// WALLET
+export const getWallet = () => api.get("/admin/wallet");
+export const getWalletBalance = () => api.get("/admin/wallet/balance");
+export const initiateDeposit = (data: { amount_ngn: number }) =>
+  api.post("/admin/wallet/initiate-deposit", data);
+export const getWalletTransactions = (params?: any) =>
+  api.get("/admin/wallet/transactions", { params });
+
 export const getTopRiskWorkers = (limit = 10) =>
   api.get("/admin/analytics/top-risk-workers", { params: { limit } });
 

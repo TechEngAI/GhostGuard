@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, BarChart3, Briefcase, FileText, LayoutDashboard, Settings, UserCog, Users } from "lucide-react";
+import { AlertTriangle, BarChart3, Briefcase, FileText, LayoutDashboard, Settings, UserCog, Users, Wallet } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import SidebarBase from "./SidebarBase";
 
@@ -11,6 +11,7 @@ const nav = [
   { label: "HR Officers", href: "/admin/hr", icon: UserCog },
   { label: "Fraud Signals", href: "/admin/fraud-signals", icon: AlertTriangle },
   { label: "Payroll", href: "/admin/payroll", icon: FileText },
+  { label: "Wallet", href: "/admin/wallet", icon: Wallet },
   { label: "Analytics", href: "/admin/analytics", icon: BarChart3 },
   { label: "Settings", href: "/admin/settings", icon: Settings },
 ];
