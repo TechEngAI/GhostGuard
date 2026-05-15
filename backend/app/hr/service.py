@@ -6,6 +6,7 @@ from fastapi.encoders import jsonable_encoder
 
 from app.auth.schemas import RefreshRequest
 from app.auth.service import write_audit
+from app.config import get_settings
 from app.database import get_supabase, get_supabase_admin_client, get_supabase_auth_client
 from app.errors import AppError
 from app.hr.schemas import (
@@ -57,18 +58,25 @@ def _is_email_not_verified_error(exc: Exception) -> bool:
 
 async def create_hr_officer(admin: dict[str, Any], payload: HRCreateRequest) -> dict[str, Any]:
     db = get_supabase()
+    settings = get_settings()
     email = str(payload.email).lower()
     if _email_in_use(email):
         raise AppError(409, "HR_ALREADY_EXISTS", "This email is already in use.", "email")
     try:
         invite = get_supabase_admin_client().auth.admin.invite_user_by_email(
             email,
-            options={"data": {"user_type": "hr", "company_id": admin["company_id"]}},
+            options={
+                "data": {"user_type": "hr", "company_id": admin["company_id"]},
+                "email_redirect_to": f"{settings.frontend_url}/hr/verify?email={email}",
+            },
         )
     except TypeError:
         invite = get_supabase_admin_client().auth.admin.invite_user_by_email(
             email,
-            {"data": {"user_type": "hr", "company_id": admin["company_id"]}},
+            {
+                "data": {"user_type": "hr", "company_id": admin["company_id"]},
+                "email_redirect_to": f"{settings.frontend_url}/hr/verify?email={email}",
+            },
         )
     except Exception as exc:
         raise AppError(400, "AUTH_INVITE_FAILED", "Unable to send HR invitation.") from exc
