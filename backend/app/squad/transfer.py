@@ -1,6 +1,6 @@
 import httpx
 import time
-from app.config import settings
+from app.config import get_settings
 
 
 def _make_transfer_reference(company_id: str, worker_id: str) -> str:
@@ -8,7 +8,7 @@ def _make_transfer_reference(company_id: str, worker_id: str) -> str:
     Generate unique transfer reference.
     Squad REQUIRES merchant ID prepended — format: MERCHANTID_xxxx
     """
-    merchant = settings.squad_merchant_id.upper()
+    merchant = get_settings().squad_merchant_id.upper()
     comp = company_id.replace("-", "")[:8].upper()
     work = worker_id.replace("-", "")[:8].upper()
     ts = str(int(time.time()))
@@ -24,9 +24,9 @@ async def get_ledger_balance() -> dict:
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.get(
-                f"{settings.squad_base_url}/merchant/balance",
+                f"{get_settings().squad_base_url}/merchant/balance",
                 params={"currency_id": "NGN"},
-                headers={"Authorization": f"Bearer {settings.squad_secret_key}"}
+                headers={"Authorization": f"Bearer {get_settings().squad_secret_key}"}
             )
 
         if response.status_code == 200:
@@ -78,10 +78,10 @@ async def transfer_to_worker(
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{settings.squad_base_url}/payout/transfer",
+                f"{get_settings().squad_base_url}/payout/transfer",
                 json=payload,
                 headers={
-                    "Authorization": f"Bearer {settings.squad_secret_key}",
+                    "Authorization": f"Bearer {get_settings().squad_secret_key}",
                     "Content-Type": "application/json"
                 }
             )
@@ -155,10 +155,10 @@ async def requery_transfer(transaction_reference: str) -> dict:
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(
-                f"{settings.squad_base_url}/payout/requery",
+                f"{get_settings().squad_base_url}/payout/requery",
                 json={"transaction_reference": transaction_reference},
                 headers={
-                    "Authorization": f"Bearer {settings.squad_secret_key}",
+                    "Authorization": f"Bearer {get_settings().squad_secret_key}",
                     "Content-Type": "application/json"
                 }
             )

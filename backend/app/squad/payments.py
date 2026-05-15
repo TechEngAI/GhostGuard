@@ -1,6 +1,6 @@
 import httpx
 import time
-from app.config import settings
+from app.config import get_settings
 
 
 def _make_deposit_reference(company_id: str) -> str:
@@ -9,7 +9,7 @@ def _make_deposit_reference(company_id: str) -> str:
     Squad REQUIRES merchant ID to be prepended.
     Format: {MERCHANT_ID}_{company_short}_{timestamp}
     """
-    merchant = settings.squad_merchant_id.upper()
+    merchant = get_settings().squad_merchant_id.upper()
     comp = company_id.replace("-", "")[:8].upper()
     ts = str(int(time.time()))
     return f"{merchant}_{comp}_{ts}"
@@ -46,7 +46,7 @@ async def initiate_deposit(
         "initiate_type": "redirect",
         "currency": "NGN",
         "transaction_ref": reference,
-        "callback_url": settings.squad_callback_url,
+        "callback_url": get_settings().squad_callback_url,
         "pass_charge": False,
         "payment_channels": ["card", "bank", "ussd", "transfer"],
     }
@@ -54,10 +54,10 @@ async def initiate_deposit(
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(
-                f"{settings.squad_base_url}/transaction/initiate",
+                f"{get_settings().squad_base_url}/transaction/initiate",
                 json=payload,
                 headers={
-                    "Authorization": f"Bearer {settings.squad_secret_key}",
+                    "Authorization": f"Bearer {get_settings().squad_secret_key}",
                     "Content-Type": "application/json"
                 }
             )
@@ -97,8 +97,8 @@ async def verify_payment(transaction_reference: str) -> dict:
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.get(
-                f"{settings.squad_base_url}/transaction/verify/{transaction_reference}",
-                headers={"Authorization": f"Bearer {settings.squad_secret_key}"}
+                f"{get_settings().squad_base_url}/transaction/verify/{transaction_reference}",
+                headers={"Authorization": f"Bearer {get_settings().squad_secret_key}"}
             )
 
         print(f"Squad verify response: {response.status_code} — {response.text[:300]}")

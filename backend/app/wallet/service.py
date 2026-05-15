@@ -5,7 +5,7 @@ from app.wallet.schemas import WalletOverview, WalletTransaction, WalletBalance
 from fastapi import HTTPException
 import hmac
 import hashlib
-from app.config import settings
+from app.config import get_settings
 
 
 async def get_wallet_overview(company_id: str) -> WalletOverview:
@@ -72,7 +72,7 @@ async def initiate_wallet_deposit(amount_ngn: float, admin: dict) -> dict:
 
 async def handle_squad_webhook(raw_body: bytes, signature: str, body: dict):
     # Validate signature
-    expected_signature = hmac.new(settings.squad_webhook_secret.encode(), raw_body, hashlib.sha512).hexdigest().upper()
+    expected_signature = hmac.new(get_settings().squad_webhook_secret.encode(), raw_body, hashlib.sha512).hexdigest().upper()
     if signature.upper() != expected_signature:
         print("Invalid webhook signature")
         return {"status": "ok"}  # Always return 200
