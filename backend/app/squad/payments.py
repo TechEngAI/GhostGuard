@@ -31,7 +31,7 @@ async def initiate_deposit(
     Request body:
       email: customer email
       amount: amount in kobo
-      initiate_type: "inline" or "redirect" — use "redirect" for web
+      initiate_type: "inline" (Squad only accepts inline for web)
       currency: "NGN"
       transaction_ref: unique reference with merchant ID prepended
       callback_url: where Squad redirects after payment
@@ -43,7 +43,7 @@ async def initiate_deposit(
     payload = {
         "email": admin_email,
         "amount": amount_kobo,
-        "initiate_type": "redirect",
+        "initiate_type": "inline",
         "currency": "NGN",
         "transaction_ref": reference,
         "callback_url": get_settings().squad_callback_url,
