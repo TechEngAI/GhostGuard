@@ -1,4 +1,3 @@
-@@@ -1,0 +1,11 @@
 "use client";
 export const dynamic = "force-dynamic";
 
